@@ -27,7 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
 # --- SYSTEM INTEGRATIONS ---
 from src.services.market_resolver import MarketResolver
 from src.agent_engine.safety_sentinel import SafetySentinel
-from services.solana_executor import SolanaExecutor
+from src.services.solana_executor import SolanaExecutor
 
 # Setup Advanced Structured Logging
 logging.basicConfig(
