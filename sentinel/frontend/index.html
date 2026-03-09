@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>GlitchApe — Sentinel Protocol</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { matte: '#000000', surface: '#0A0A0A', aqua: '#00F0FF', silver: '#9CA3AF' },
+          fontFamily: { 
+            display: ['"Space Grotesk"', 'system-ui', 'sans-serif'], 
+            gothic: ['"Cinzel"', 'serif'],
+            mono: ['"Fira Code"', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Cinzel:wght@600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/aos@2.3.1/dist/aos.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css"/>
+  
+  <style>
+    :root { --accent: #00F0FF; --bg: #000000; }
+    
+    html, body {
+        max-width: 100vw;
+        overflow-x: hidden;
+    }
+
+    body { 
+        background-color: var(--bg); 
+        color: #ffffff; 
+        font-family: 'Space Grotesk', sans-serif; 
+        -webkit-font-smoothing: antialiased;
+    }
+
+    /* Refined Glassmorphism */
+    .glass { 
+        background: rgba(10, 10, 10, 0.45); 
+        backdrop-filter: blur(24px) saturate(150%); 
+        -webkit-backdrop-filter: blur(24px) saturate(150%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+    }
+
+    .glass-card {
+        background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-top: 1px solid rgba(0, 240, 255, 0.15);
+        backdrop-filter: blur(12px);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    .glass-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 30px rgba(0, 240, 255, 0.1);
+        border-top: 1px solid rgba(0, 240, 255, 0.5);
+    }
+
+    /* Input Fields */
+    .input-glass {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #fff;
+        transition: all 0.3s ease;
+    }
+    .input-glass:focus {
+        background: rgba(0, 240, 255, 0.05);
+        border-color: rgba(0, 240, 255, 0.5);
+        outline: none;
+        box-shadow: 0 0 15px rgba(0, 240, 255, 0.1);
+    }
+
+    /* Subtle, Readable Glitch */
+    .glitch-text { position: relative; font-family: 'Cinzel', serif; display: inline-block; }
+    .glitch-text::before, .glitch-text::after {
+        content: attr(data-text); position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0.8;
+    }
+    .glitch-text::before { left: 2px; text-shadow: -1px 0 var(--accent); clip-path: inset(20% 0 80% 0); animation: glitch-anim-1 2s infinite linear alternate-reverse; }
+    .glitch-text::after { left: -2px; text-shadow: 1px 0 #ff00c1; clip-path: inset(80% 0 20% 0); animation: glitch-anim-2 3s infinite linear alternate-reverse; }
+    @keyframes glitch-anim-1 { 0% { clip-path: inset(20% 0 80% 0); } 100% { clip-path: inset(50% 0 30% 0); } }
+    @keyframes glitch-anim-2 { 0% { clip-path: inset(60% 0 10% 0); } 100% { clip-path: inset(10% 0 60% 0); } }
+
+    /* GSAP Portal Background */
+    #portal-container { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+    .portal-ring { position: absolute; border-radius: 50%; background: radial-gradient(circle, rgba(0,240,255,0.08) 0%, transparent 60%); }
+
+    /* Buttons */
+    .btn-glow { transition: all 0.3s ease; }
+    .btn-glow:hover { transform: translateY(-2px); box-shadow: 0 0 20px rgba(0, 240, 255, 0.3); background: rgba(0, 240, 255, 1); color: #000; }
+  </style>
+</head>
+<body class="relative selection:bg-aqua selection:text-black">
+
+  <div id="portal-container"></div>
+  <div class="fixed inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none z-[-1] mix-blend-overlay"></div>
+
+  <nav class="w-full fixed top-0 z-50 glass border-b border-white/5">
+    <div class="max-w-[1400px] mx-auto flex items-center justify-between px-4 sm:px-6 md:px-12 py-4">
+      <div class="font-gothic text-lg md:text-2xl font-bold tracking-widest text-white">GLITCH<span class="text-aqua">APE</span></div>
+      <div class="hidden md:flex gap-8 text-[11px] uppercase tracking-[0.2em] text-silver font-medium">
+        <a href="#about" class="hover:text-aqua transition-colors">Intelligence</a>
+        <a href="#features" class="hover:text-aqua transition-colors">Protocol</a>
+      </div>
+      <button onclick="openModal('authModal')" class="text-[10px] md:text-xs uppercase tracking-widest text-aqua border border-aqua/30 px-4 sm:px-5 py-2 rounded-full hover:bg-aqua hover:text-black transition-all">
+        Login
+      </button>
+    </div>
+  </nav>
+
+  <header class="relative min-h-[100dvh] flex flex-col items-center justify-center text-center bg-cover bg-center px-4 md:px-8 pt-32 md:pt-20" style="background-image: url('https://hebbkx1anhila5yf.public.blob.vercel-storage.com/sentinel_overseeing_transactions%28slideshow%29-p0E3xtaIwoCNliwEYM8rlCYUE72qs7.jpg');">
+    <div class="absolute inset-0 bg-black/70"></div>
+    <div data-aos="zoom-out" data-aos-duration="1000" class="max-w-5xl mx-auto relative z-10 w-full">
+      <h1 class="font-gothic text-4xl sm:text-5xl md:text-7xl lg:text-8xl xl:text-[8rem] font-bold leading-none tracking-tighter mb-4 glitch-text" data-text="SENTINEL">
+        SENTINEL
+      </h1>
+      <p class="text-silver text-[10px] md:text-sm uppercase tracking-[0.4em] md:tracking-[0.8em] mb-8 md:mb-12 opacity-80" data-aos="fade-up" data-aos-delay="200">
+        Autonomous Solana Reconnaissance
+      </p>
+      <div data-aos="fade-up" data-aos-delay="400">
+        <button onclick="openModal('authModal')" class="glass btn-glow px-6 sm:px-8 md:px-14 py-3 sm:py-4 md:py-5 rounded-full text-aqua font-bold text-xs sm:text-sm md:text-base uppercase tracking-[0.2em] md:tracking-[0.3em]">
+          Initialize Handshake
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <section id="cinematic-slider" class="w-full h-[60dvh] md:h-[80dvh] relative overflow-hidden swiper">
+    <div class="swiper-wrapper">
+      <div class="swiper-slide relative">
+        <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/sentinel_overseeing_transactions%28slideshow%29-p0E3xtaIwoCNliwEYM8rlCYUE72qs7.jpg" alt="Real-Time Chain Intelligence" class="w-full h-full object-cover">
+        <div class="absolute inset-0 bg-gradient-to-b from-black/40 to-black/70"></div>
+        <div class="absolute inset-0 flex flex-col items-center justify-center text-center px-4 md:px-6">
+          <h2 class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl xl:text-6xl font-gothic font-bold text-white mb-3 md:mb-4">Real-Time Chain Intelligence</h2>
+          <p class="text-silver text-xs sm:text-sm md:text-base max-w-2xl">Sentinel monitors blockchain transactions and executes autonomous analysis at millisecond latency.</p>
+        </div>
+      </div>
+      <div class="swiper-slide relative">
+        <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/cyber_fotress%28slideshowsection%29-kr3EDf3MqXcmIdWM8K6RJDzLL06oBq.jpg" alt="Cyber Fortress Security" class="w-full h-full object-cover">
+        <div class="absolute inset-0 bg-gradient-to-b from-black/40 to-black/70"></div>
+        <div class="absolute inset-0 flex flex-col items-center justify-center text-center px-4 md:px-6">
+          <h2 class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl xl:text-6xl font-gothic font-bold text-white mb-3 md:mb-4">Cryptographic Fortress</h2>
+          <p class="text-silver text-xs sm:text-sm md:text-base max-w-2xl">Military-grade encryption protects your identity and assets with Argon2id hashing.</p>
+        </div>
+      </div>
+      <div class="swiper-slide relative">
+        <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/homepage_section-D3NOTvfbY6HqhLx0wa5I5VMnpxbm3i.jpg" alt="Neural Interface Panels" class="w-full h-full object-cover">
+        <div class="absolute inset-0 bg-gradient-to-b from-black/40 to-black/70"></div>
+        <div class="absolute inset-0 flex flex-col items-center justify-center text-center px-4 md:px-6">
+          <h2 class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl xl:text-6xl font-gothic font-bold text-white mb-3 md:mb-4">Neural Interface</h2>
+          <p class="text-silver text-xs sm:text-sm md:text-base max-w-2xl">Access live analytics and execution logs through your personal command terminal.</p>
+        </div>
+      </div>
+      <div class="swiper-slide relative">
+        <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/blockchain_network_visualization-TzLIDtbYx29F0RbF7m4QYoqpevdDrj.jpg" alt="Blockchain Network" class="w-full h-full object-cover">
+        <div class="absolute inset-0 bg-gradient-to-b from-black/40 to-black/70"></div>
+        <div class="absolute inset-0 flex flex-col items-center justify-center text-center px-4 md:px-6">
+          <h2 class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl xl:text-6xl font-gothic font-bold text-white mb-3 md:mb-4">Distributed Ledger</h2>
+          <p class="text-silver text-xs sm:text-sm md:text-base max-w-2xl">Connected directly to the Solana blockchain for uncompromised execution.</p>
+        </div>
+      </div>
+      <div class="swiper-slide relative">
+        <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/sentinel_on_the_blockchain%28slideshow%29-KoU2lxVERU81sapeDa1M9faiLlZvJg.jpg" alt="Sentinel on Blockchain" class="w-full h-full object-cover">
+        <div class="absolute inset-0 bg-gradient-to-b from-black/40 to-black/70"></div>
+        <div class="absolute inset-0 flex flex-col items-center justify-center text-center px-4 md:px-6">
+          <h2 class="text-2xl sm:text-3xl md:text-4xl lg:text-5xl xl:text-6xl font-gothic font-bold text-white mb-3 md:mb-4">Autonomous Execution</h2>
+          <p class="text-silver text-xs sm:text-sm md:text-base max-w-2xl">Issue commands in natural language and let the AI compile, sign, and broadcast.</p>
+        </div>
+      </div>
+    </div>
+    <div class="swiper-pagination absolute bottom-6 md:bottom-8 left-1/2 transform -translate-x-1/2 z-20"></div>
+  </section>
+
+  <section id="about" class="py-20 md:py-24 px-4 sm:px-6 md:px-12 relative z-10 border-t border-white/5 bg-black/40">
+    <div class="w-full max-w-[1400px] mx-auto">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 md:gap-16 items-center">
+        <div data-aos="fade-right">
+          <h2 class="font-gothic text-3xl sm:text-4xl md:text-5xl font-bold text-white mb-6 tracking-widest">THE MIND ON THE <span class="text-aqua">CHAIN</span></h2>
+          <p class="text-silver text-sm md:text-base leading-relaxed mb-6 font-light">
+            Sentinel is not just an interface; it is an autonomous intelligence system built natively for the Solana blockchain. It acts as your algorithmic reconnaissance unit, scanning the chain in real-time to identify anomalies, evaluate smart contract integrity, and execute transactions at millisecond latency.
+          </p>
+          <p class="text-silver text-sm md:text-base leading-relaxed font-light">
+            Operating directly from the GlitchApe platform, Sentinel connects you directly to the ledger through a highly secure, WebSocket-driven neural link. No lag. No intermediaries. Just pure data.
+          </p>
+        </div>
+        <div class="relative flex justify-center" data-aos="fade-left">
+          <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/cyber_fotress%28slideshowsection%29-kr3EDf3MqXcmIdWM8K6RJDzLL06oBq.jpg" alt="Blockchain intelligence interface" class="w-full rounded-2xl shadow-[0_0_40px_rgba(0,240,255,0.25)] border border-aqua/20">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features" class="py-20 md:py-24 px-4 sm:px-6 md:px-12 relative z-10">
+    <div class="w-full max-w-[1400px] mx-auto text-center mb-12 md:mb-16" data-aos="fade-up">
+      <h3 class="font-gothic text-2xl sm:text-3xl md:text-4xl font-bold tracking-widest text-white mb-4">TACTICAL ADVANTAGES</h3>
+      <p class="text-[10px] text-aqua uppercase tracking-[0.3em]">Designed for Uncompromising Operators</p>
+    </div>
+
+    <div class="w-full max-w-[1400px] mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
+        <div class="glass-card p-8 rounded-2xl" data-aos="fade-up" data-aos-delay="100">
+            <div class="w-12 h-12 rounded-full bg-aqua/10 flex items-center justify-center mb-6 border border-aqua/30">
+                <span class="text-aqua font-mono text-xl">01</span>
+            </div>
+            <h4 class="font-bold text-lg mb-3 tracking-wider text-white">Military-Grade Security</h4>
+            <p class="text-silver text-sm leading-relaxed font-light">Secured by Argon2id hashing algorithms and protected by Brevo multi-factor authentication. Your terminal is cryptographically sealed.</p>
+        </div>
+        <div class="glass-card p-8 rounded-2xl" data-aos="fade-up" data-aos-delay="200">
+            <div class="w-12 h-12 rounded-full bg-aqua/10 flex items-center justify-center mb-6 border border-aqua/30">
+                <span class="text-aqua font-mono text-xl">02</span>
+            </div>
+            <h4 class="font-bold text-lg mb-3 tracking-wider text-white">Neural WebSockets</h4>
+            <p class="text-silver text-sm leading-relaxed font-light">Experience the chain in real-time. Sentinel streams live analytics and execution logs directly to your HUD without refreshing.</p>
+        </div>
+        <div class="glass-card p-8 rounded-2xl" data-aos="fade-up" data-aos-delay="300">
+            <div class="w-12 h-12 rounded-full bg-aqua/10 flex items-center justify-center mb-6 border border-aqua/30">
+                <span class="text-aqua font-mono text-xl">03</span>
+            </div>
+            <h4 class="font-bold text-lg mb-3 tracking-wider text-white">Algorithmic Execution</h4>
+            <p class="text-silver text-sm leading-relaxed font-light">Bypass standard clunky interfaces. Issue commands in natural language, and let the AI compile, sign, and broadcast to Solana.</p>
+        </div>
+    </div>
+  </section>
+
+  <section class="py-20 md:py-24 px-4 sm:px-6 md:px-12 relative z-10 border-t border-white/5 bg-gradient-to-b from-transparent to-black">
+    <div class="w-full max-w-[1400px] mx-auto">
+      <div class="max-w-3xl mx-auto text-center" data-aos="zoom-in">
+        <h2 class="font-gothic text-3xl sm:text-4xl md:text-5xl font-bold tracking-widest mb-6">READY TO DEPLOY?</h2>
+        <p class="text-silver text-sm mb-8 md:mb-10">Establish a secure connection and access the terminal.</p>
+        <button onclick="openModal('authModal')" class="glass btn-glow px-8 sm:px-10 py-3 sm:py-4 rounded-full text-aqua font-bold text-xs sm:text-sm uppercase tracking-[0.2em]">
+          Access Terminal
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <footer class="relative z-10 glass border-t border-white/5 py-16">
+    <div class="w-full max-w-[1400px] mx-auto px-4 sm:px-6 md:px-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+      <div data-aos="fade-right">
+        <h4 class="font-gothic text-aqua font-bold text-xl mb-4 tracking-widest">GLITCHAPE</h4>
+        <p class="text-silver text-xs leading-relaxed uppercase tracking-widest opacity-60 max-w-xs">
+          The final frontier of autonomous on-chain intelligence.
+        </p>
+      </div>
+      <div class="space-y-4" data-aos="fade-up" data-aos-delay="100">
+        <h5 class="text-[10px] text-white/50 uppercase tracking-widest mb-4">Protocol Status</h5>
+        <div class="flex justify-between items-center text-xs border-b border-white/5 pb-2">
+            <span class="text-silver uppercase tracking-widest">Neural Link</span>
+            <span class="text-aqua font-mono flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-aqua animate-pulse"></span> ACTIVE</span>
+        </div>
+        <div class="flex justify-between items-center text-xs border-b border-white/5 pb-2">
+            <span class="text-silver uppercase tracking-widest">Solana RPC</span>
+            <span class="text-aqua font-mono flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-aqua"></span> SYNCED</span>
+        </div>
+      </div>
+      <div class="space-y-4" data-aos="fade-up" data-aos-delay="200">
+        <h5 class="text-[10px] text-white/50 uppercase tracking-widest mb-4">Security</h5>
+        <div class="flex justify-between items-center text-xs border-b border-white/5 pb-2">
+            <span class="text-silver uppercase tracking-widest">Auth Level</span>
+            <span class="text-silver font-mono">Argon2id</span>
+        </div>
+        <div class="flex justify-between items-center text-xs border-b border-white/5 pb-2">
+            <span class="text-silver uppercase tracking-widest">2FA Dispatch</span>
+            <span class="text-silver font-mono">Brevo Relay</span>
+        </div>
+      </div>
+      <div class="flex flex-col justify-end items-start lg:items-end text-left lg:text-right" data-aos="fade-left">
+        <span class="font-gothic text-5xl md:text-[80px] font-bold text-white/5 leading-none select-none mb-2">S_V4</span>
+        <p class="text-[9px] md:text-[10px] text-silver tracking-widest uppercase">
+          © 2026 GLITCHAPE.FUN<br>ALL RIGHTS RESERVED
+        </p>
+      </div>
+    </div>
+  </footer>
+
+  <div id="authModal" class="fixed inset-0 z-[1000] flex items-center justify-center hidden px-4">
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-md transition-opacity" onclick="if(!authLoading) closeModal('authModal')"></div>
+    <div class="glass w-full max-w-md p-6 sm:p-8 md:p-10 rounded-3xl relative z-10 shadow-2xl border border-aqua/20 max-h-[90dvh] overflow-y-auto">
+      <div id="phase1" class="space-y-6">
+        <div class="text-center mb-8">
+            <h2 class="font-gothic text-2xl md:text-3xl font-bold tracking-widest text-white mb-2" id="authTitle">TERMINAL ACCESS</h2>
+            <p class="text-[10px] text-aqua uppercase tracking-widest">Argon2 Multi-Layer Verification</p>
+        </div>
+        <form onsubmit="handleAuth(event)" class="space-y-5">
+            <div>
+                <label class="block text-[9px] uppercase tracking-widest text-silver mb-2 ml-1">Identity Tag</label>
+                <input type="email" id="authEmail" required class="w-full input-glass px-5 py-4 rounded-xl text-sm" placeholder="operator@sentinel.ai">
+            </div>
+            <div>
+                <label class="block text-[9px] uppercase tracking-widest text-silver mb-2 ml-1">Encryption Key</label>
+                <input type="password" id="authPassword" required class="w-full input-glass px-5 py-4 rounded-xl text-sm" placeholder="••••••••••••">
+            </div>
+            <button type="submit" id="authBtn" class="w-full bg-aqua/10 border border-aqua text-aqua hover:bg-aqua hover:text-black font-bold py-4 rounded-xl uppercase tracking-[0.2em] transition-all mt-4 text-xs md:text-sm">
+                Engage Link
+            </button>
+        </form>
+        <div class="text-center mt-6">
+            <button type="button" onclick="toggleAuthMode()" id="modeToggle" class="text-[10px] text-silver uppercase tracking-widest hover:text-aqua transition-colors">
+                New Operator? Enroll Identity
+            </button>
+        </div>
+      </div>
+      <div id="phase2" class="hidden space-y-6">
+        <div class="text-center mb-8">
+            <h2 class="font-gothic text-2xl md:text-3xl font-bold tracking-widest text-aqua mb-2">2FA SYNC</h2>
+            <p class="text-[10px] text-silver uppercase tracking-widest">Verify Brevo Dispatch</p>
+        </div>
+        <form onsubmit="handleVerifyOTP(event)" class="space-y-5">
+          <div>
+            <label class="block text-[9px] uppercase tracking-widest text-silver mb-2 text-center">Enter 6-Digit Code</label>
+            <input
+              type="text"
+              id="otpCode"
+              required
+              inputmode="numeric"
+              pattern="[0-9]*"
+              maxlength="6"
+              class="w-full input-glass px-5 py-5 rounded-xl text-center text-3xl md:text-4xl font-mono tracking-[0.5em] text-aqua placeholder:text-aqua/20"
+              placeholder="000000"
+            >
+          </div>
+          <button type="submit" class="w-full bg-aqua text-black font-bold py-4 rounded-xl uppercase tracking-[0.2em] hover:bg-white transition-all mt-4 text-xs md:text-sm shadow-[0_0_15px_rgba(0,240,255,0.4)]">
+            Finalize Auth
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
+  <script>
+    // Check if user is already logged in
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      window.location.href = 'chat.html';
+    }
+
+    AOS.init({ once: true, offset: 50 });
+
+    function spawnPortal() {
+      const portal = document.createElement('div');
+      portal.className = 'portal-ring';
+      const size = Math.floor(Math.random() * 400) + 200;
+      portal.style.width = `${size}px`; portal.style.height = `${size}px`;
+      portal.style.left = `${Math.floor(Math.random() * 100)}vw`;
+      portal.style.top = `${Math.floor(Math.random() * 100)}vh`;
+      portal.style.transform = 'translate(-50%, -50%)';
+      document.getElementById('portal-container').appendChild(portal);
+      gsap.fromTo(portal, { opacity: 0, scale: 0.8 }, { opacity: 0.5, scale: 1.5, duration: 8, ease: "sine.inOut", onComplete: () => portal.remove() });
+    }
+    for(let i=0; i<3; i++) setTimeout(spawnPortal, i*1000);
+    setInterval(spawnPortal, 4000);
+
+    // Initialize Swiper
+    new Swiper(".swiper", {
+      effect: "fade",
+      loop: true,
+      autoplay: {
+        delay: 5000,
+        disableOnInteraction: false,
+      },
+      pagination: {
+        el: ".swiper-pagination",
+        clickable: true,
+      }
+    });
+
+    const API_BASE = window.location.origin;
+    let isRegistering = false;
+    let authLoading = false;
+
+    function showError(msg) {
+      const box = document.createElement("div");
+      box.className = "fixed bottom-6 right-6 bg-red-500 text-white px-6 py-3 rounded-xl shadow-lg z-[2000]";
+      box.innerText = msg;
+      document.body.appendChild(box);
+      setTimeout(() => box.remove(), 4000);
+    }
+
+    function openModal(id) { document.getElementById(id).classList.remove('hidden'); document.body.style.overflow = 'hidden'; }
+    function closeModal(id) { document.getElementById(id).classList.add('hidden'); document.body.style.overflow = ''; }
+    
+    function toggleAuthMode() {
+      isRegistering = !isRegistering;
+      document.getElementById('authTitle').innerText = isRegistering ? "ENROLL OPERATOR" : "TERMINAL ACCESS";
+      document.getElementById('authBtn').innerText = isRegistering ? "CREATE IDENTITY" : "ENGAGE LINK";
+      document.getElementById('modeToggle').innerText = isRegistering ? "Registered? Login Instead" : "New Operator? Enroll Identity";
+    }
+
+    async function handleAuth(e) {
+      e.preventDefault();
+      if(authLoading) return;
+      authLoading = true;
+      const email = document.getElementById('authEmail').value;
+      const password = document.getElementById('authPassword').value;
+      const btn = document.getElementById('authBtn');
+      const originalText = btn.innerText;
+      btn.innerText = "VERIFYING..."; btn.disabled = true;
+      const endpoint = isRegistering ? "/auth/register" : "/auth/login";
+      
+      try {
+        const resp = await fetch(`${API_BASE}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+        const text = await resp.text();
+        const data = text ? JSON.parse(text) : {};
+        if (!resp.ok) throw new Error(data.detail || "Authentication Failed");
+
+        if (isRegistering) {
+          showError("Identity secured. Proceeding to Login.");
+          toggleAuthMode(); document.getElementById('authPassword').value = '';
+        } else {
+          document.getElementById('phase1').classList.add('hidden');
+          document.getElementById('phase2').classList.remove('hidden');
+        }
+      } catch (err) { showError(err.message); } finally { btn.innerText = originalText; btn.disabled = false; authLoading = false; }
+    }
+
+    async function handleVerifyOTP(e) {
+      e.preventDefault();
+      if(authLoading) return;
+      authLoading = true;
+      const email = document.getElementById('authEmail').value;
+      const otp_code = document.getElementById('otpCode').value;
+      const btn = e.target.querySelector('button');
+      const originalText = btn.innerText;
+      btn.innerText = "SYNCING..."; btn.disabled = true;
+
+      try {
+        const resp = await fetch(`${API_BASE}/auth/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, otp_code }) });
+        const text = await resp.text();
+        const data = text ? JSON.parse(text) : {};
+        if (!resp.ok) throw new Error(data.detail || "Invalid Code");
+        if (!data.access_token) throw new Error("Authentication token missing");
+        localStorage.setItem('access_token', data.access_token);
+        window.location.href = 'chat.html';
+      } catch (err) { showError(err.message); } finally { btn.innerText = originalText; btn.disabled = false; authLoading = false; }
+    }
+  </script>
+</body>
+</html>
