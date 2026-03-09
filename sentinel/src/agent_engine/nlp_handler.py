@@ -146,7 +146,7 @@ class SentinelNLPHandler:
             log.warning("OPENROUTER_API_KEY not found. Neural sync offline.")
             
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
-        self.primary_model = "meta-llama/llama-3.3-70b-instruct"
+        self.primary_model = "arcee-ai/trinity-large-preview:free"
         self.fallback_model = "anthropic/claude-3.5-sonnet"
         
         # Core Sub-Modules
