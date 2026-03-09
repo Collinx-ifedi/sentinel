@@ -1,7 +1,6 @@
 # ==============================================================================
 # SENTINEL PROTOCOL - CORE DEPENDENCIES
 # ==============================================================================
-python-3.11.9
 # --- Web Server & API Framework ---
 fastapi==0.110.0
 uvicorn[standard]==0.27.1
@@ -30,8 +29,8 @@ solders==0.20.0
 anchorpy==0.19.0
 
 # --- Data Science & Technical Analysis ---
-pandas==2.2.1
-numpy==1.26.4
+pandas==2.3.3
+numpy==2.2
 scipy==1.12.0
 
 # --- Logging & Utilities ---
