@@ -429,4 +429,4 @@ async def get_trade_history(user: User = Depends(get_current_user), db: AsyncSes
 
     formatted_history = []
     for tx in history:
-        in_meta = metadata.get(tx.input_mint
+        in_meta = metadata.get(tx.input_mint)
