@@ -1,6 +1,6 @@
 # ======================================================================================
 # MODULE: SENTINEL COGNITIVE CORE (NLP HANDLER)
-# VERSION: 5.1.0 "GOD MODE - OMNISCIENT"
+# VERSION: 5.1.1 "GOD MODE - OMNISCIENT" (PATCHED)
 # DESCRIPTION: Advanced Directed Acyclic Graph (DAG) for autonomous market operations.
 #              Features: Live portfolio injection, unit normalization, yield scanning,
 #              hardware-level emergency halts, and deterministic JSON schemas.
@@ -244,9 +244,11 @@ class SentinelNLPHandler:
             
         sync_logs.append(NeuralSyncStreamer.emit("RECON", f"Locking target vector: ${intent.symbol}"))
         
-        # 1. On-Chain Resolution
-        market_data = await self.resolver.resolve_and_price(intent.symbol)
-        if not market_data.get("success"):
+        # 1. On-Chain Resolution (PATCHED TUPLE HANDLING)
+        raw_market_data = await self.resolver.resolve_and_price(intent.symbol)
+        is_success, market_data = self._normalize_market_data(raw_market_data)
+
+        if not is_success or "mint" not in market_data or "price" not in market_data:
             return ExecutionDirective(
                 action_required=False,
                 response_text=f"Target ${intent.symbol} cannot be resolved on the Solana network.",
@@ -293,8 +295,11 @@ class SentinelNLPHandler:
         """Handles deep-scan asset reporting without execution."""
         sync_logs.append(NeuralSyncStreamer.emit("RECON", f"Running deep diagnostics on ${intent.symbol}"))
         
-        market_data = await self.resolver.resolve_and_price(intent.symbol)
-        if not market_data.get("success"):
+        # PATCHED TUPLE HANDLING
+        raw_market_data = await self.resolver.resolve_and_price(intent.symbol)
+        is_success, market_data = self._normalize_market_data(raw_market_data)
+
+        if not is_success or "mint" not in market_data:
             return ExecutionDirective(False, None, f"Asset ${intent.symbol} invisible to scanners.", sync_logs)
 
         is_safe, reason, risk_score = await self.sentinel.evaluate_total_risk(
@@ -303,7 +308,7 @@ class SentinelNLPHandler:
         
         sync_logs.append(NeuralSyncStreamer.emit("TECH_SCAN", "Evaluating momentum and volume profiles..."))
         prompt = (
-            f"Provide a technical recon report on {intent.symbol}. Price is ${market_data['price']}. "
+            f"Provide a technical recon report on {intent.symbol}. Price is ${market_data.get('price', 'UNKNOWN')}. "
             f"Risk Score: {risk_score}/100. Sentinel verdict: {reason}. "
             "Advise the user if it's a hold, buy, or trap. Keep it under 4 sentences."
         )
@@ -355,6 +360,18 @@ class SentinelNLPHandler:
     # ----------------------------------------------------------------------------------
     # UTILITIES & LLM INFRASTRUCTURE
     # ----------------------------------------------------------------------------------
+    def _normalize_market_data(self, raw_result: Any) -> Tuple[bool, Dict[str, Any]]:
+        """Safely unpacks MarketResolver output whether it returns a tuple or a dict."""
+        if isinstance(raw_result, tuple):
+            is_success = raw_result[0] if len(raw_result) > 0 else False
+            data = raw_result[1] if len(raw_result) > 1 and isinstance(raw_result[1], dict) else {}
+            return is_success, data
+        
+        if isinstance(raw_result, dict):
+            return raw_result.get("success", False), raw_result
+            
+        return False, {}
+
     def _normalize_units(self, amount: float, unit: str, current_price: float) -> float:
         """Converts human input (USD, SOL, Tokens) into an absolute token amount."""
         unit = unit.upper()
