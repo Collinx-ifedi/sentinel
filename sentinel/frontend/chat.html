@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Sentinel Core | Terminal</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { matte: '#000000', surface: '#0A0A0A', aqua: '#00F0FF', silver: '#9CA3AF', danger: '#FF3B3B' },
+          fontFamily: { 
+            display: ['"Space Grotesk"', 'system-ui', 'sans-serif'], 
+            gothic: ['"Cinzel"', 'serif'],
+            mono: ['"Fira Code"', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Cinzel:wght@600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  
+  <style>
+    /* * GLOBAL SYSTEM STYLES 
+     * Enforcing strict 100dvh to prevent mobile browser address-bar jumping.
+     */
+    :root { 
+        --accent: #00F0FF;
+    }
+    body, html {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background-color: #0A0A0A;
+        color: #FFFFFF;
+        overflow: hidden; /* Prevent body scroll, handle scrolling in child elements */
+    }
+
+    /* Custom Scrollbar for sleek UI */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+    
+    .glow-text { text-shadow: 0 0 10px rgba(0, 240, 255, 0.5); }
+    .glass-panel { background: rgba(255, 255, 255, 0.02); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.05); }
+  </style>
+</head>
+<body class="font-display flex flex-col min-h-screen h-screen overflow-hidden text-white bg-surface">
+
+  <header class="flex-shrink-0 flex justify-between items-center p-4 border-b border-white/10 glass-panel">
+    <div class="flex items-center space-x-3">
+      <div class="w-3 h-3 rounded-full bg-aqua animate-pulse shadow-[0_0_10px_#00F0FF]"></div>
+      <h1 class="font-gothic font-bold text-lg sm:text-xl tracking-widest text-white">SENTINEL <span class="text-aqua">CORE</span></h1>
+    </div>
+    <div class="text-right">
+      <div class="text-[10px] text-white/50 uppercase tracking-widest">Total Net Worth</div>
+      <div id="navBalance" class="font-mono text-base sm:text-lg font-bold glow-text">...</div>
+    </div>
+  </header>
+
+  <div class="flex flex-1 overflow-hidden">
+    <button id="sidebarToggle" class="md:hidden fixed top-20 left-4 z-50 bg-aqua/10 border border-aqua p-2 rounded-lg text-aqua" onclick="toggleSidebar()">☰</button>
+      
+    <aside id="sidebar" class="fixed md:relative inset-y-0 left-0 w-72 transform -translate-x-full md:translate-x-0 transition-transform duration-300 border-r border-white/10 flex flex-col h-full glass-panel z-40">
+          <div class="p-4 flex-1 overflow-y-auto space-y-6">
+              
+              <div>
+                  <h2 class="text-xs font-bold text-white/50 uppercase tracking-widest mb-3 border-b border-white/10 pb-1">Asset Hub</h2>
+                  <div id="portfolioList" class="space-y-2">
+                      <div class="text-xs text-white/30 italic">Initializing subroutines...</div>
+                  </div>
+              </div>
+
+              <div>
+                  <h2 class="text-xs font-bold text-white/50 uppercase tracking-widest mb-3 border-b border-white/10 pb-1">Active Yields</h2>
+                  <div id="yieldList" class="space-y-2">
+                      <div class="text-xs text-white/30 italic">Scanning validators...</div>
+                  </div>
+              </div>
+
+          </div>
+      </aside>
+
+    <main class="flex-1 flex flex-col h-full bg-matte relative overflow-hidden">
+      <div id="chatWindow" class="flex-1 overflow-y-auto px-4 md:px-8 py-4 md:py-6 space-y-4 font-mono text-xs sm:text-sm scroll-smooth">
+        <div class="text-aqua opacity-70">
+          <p>SYSTEM BOOT... OK</p>
+          <p>NEURAL SYNC... SECURE</p>
+          <p>AWAITING OPERATOR INPUT.</p>
+          <hr class="border-white/10 my-4" />
+        </div>
+      </div>
+
+      <div class="flex-shrink-0 p-3 sm:p-4 border-t border-white/10 glass-panel">
+        <form id="chatForm" class="flex gap-2">
+          <input type="text" id="chatInput" placeholder="Execute protocol directive..." 
+                 class="flex-1 min-w-0 bg-black/50 border border-white/10 rounded-lg px-3 sm:px-4 py-2 sm:py-3 text-white focus:outline-none focus:border-aqua font-mono text-xs sm:text-sm transition-colors" autocomplete="off" />
+          <button type="submit" class="shrink-0 bg-aqua text-black font-bold px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:bg-white transition-colors duration-300 font-display text-xs sm:text-sm">
+            SYNC
+          </button>
+        </form>
+      </div>
+    </main>
+
+    <aside class="w-72 flex-shrink-0 border-l border-white/10 flex flex-col h-full hidden lg:flex glass-panel">
+      <div class="p-4 flex-1 overflow-y-auto">
+        <h2 class="text-xs font-bold text-white/50 uppercase tracking-widest mb-3 border-b border-white/10 pb-1">Acquisition Ledger</h2>
+        <div id="historyList" class="space-y-2">
+          <div class="text-xs text-white/30 italic">Loading ledger...</div>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <script>
+    // Check if user is authenticated
+    if(!localStorage.getItem("access_token")){
+      window.location.href = "/";
+    }
+
+    const SentinelApp = (() => {
+      // --- CONFIGURATION ---
+      const API_BASE = window.location.origin;
+        
+      // --- DOM ELEMENTS ---
+      const Elements = {
+        navBalance: document.getElementById('navBalance'),
+        portfolioList: document.getElementById('portfolioList'),
+        yieldList: document.getElementById('yieldList'),
+        historyList: document.getElementById('historyList'),
+        chatForm: document.getElementById('chatForm'),
+        chatInput: document.getElementById('chatInput'),
+        chatWindow: document.getElementById('chatWindow')
+      };
+
+      // --- UTILITIES ---
+      const Utils = {
+        formatCurrency: (value) => {
+          return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+        },
+        appendLog: (message, type = 'system') => {
+          const el = document.createElement('div');
+          if(type === 'user') {
+            el.className = 'text-white border-l-2 border-white pl-3 ml-auto text-right mb-4';
+            el.innerHTML = `<span class="opacity-50 text-[10px] uppercase">Operator</span><br/>${message}`;
+          } else if(type === 'agent') {
+            el.className = 'text-aqua border-l-2 border-aqua pl-3 mb-4';
+            el.innerHTML = `<span class="opacity-50 text-[10px] uppercase text-white">Sentinel</span><br/>${message}`;
+          } else {
+            el.className = 'text-silver text-xs opacity-70 mb-1';
+            el.innerText = message;
+          }
+          Elements.chatWindow.appendChild(el);
+          Elements.chatWindow.scrollTop = Elements.chatWindow.scrollHeight;
+        }
+      };
+
+      // --- AUTHENTICATION MODULE ---
+      const Auth = {
+        getToken: () => localStorage.getItem('access_token'),
+        logout: () => {
+          localStorage.removeItem('access_token');
+          window.location.href = '/';
+        }
+      };
+
+      // --- API FETCHER ---
+      const API = {
+        async get(endpoint) {
+          const token = Auth.getToken();
+          if (!token) return null;
+          try {
+            const res = await fetch(`${API_BASE}${endpoint}`, {
+              headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if(res.status === 401) {
+              localStorage.removeItem("access_token");
+              window.location.href = "/";
+              return null;
+            }
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return await res.json();
+          } catch (err) {
+            console.error(`Fetch error on ${endpoint}:`, err);
+            return null;
+          }
+        },
+        async post(endpoint, data) {
+          const token = Auth.getToken();
+          try {
+            const res = await fetch(`${API_BASE}${endpoint}`, {
+              method: 'POST',
+              headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}` 
+              },
+              body: JSON.stringify(data)
+            });
+            if(res.status === 401) {
+              localStorage.removeItem("access_token");
+              window.location.href = "/";
+              return null;
+            }
+            const text = await res.text();
+            return text ? JSON.parse(text) : { reply: "Connection failure. Cannot reach Sentinel Core." };
+          } catch (err) {
+            console.error("Chat sync failed:", err);
+            return { reply: "Connection failure. Cannot reach Sentinel Core." };
+          }
+        }
+      };
+
+      // --- DASHBOARD MODULE (THE UPDATES) ---
+      const Dashboard = {
+        async loadPortfolio() {
+          const data = await API.get('/wallet/portfolio');
+          if (!data) return;
+
+          Elements.navBalance.innerText = Utils.formatCurrency(data.total_net_worth_usd);
+
+          let html = '';
+          data.assets.forEach(a => {
+            html += `
+            <div class="sidebar-item p-3 rounded-xl border border-white/5 bg-white/[0.01] hover:bg-white/[0.05] transition-colors">
+              <div class="flex justify-between items-center mb-1">
+                <span class="text-xs font-bold text-white">${a.symbol}</span>
+                <span class="text-[10px] text-aqua truncate ml-2">${a.name}</span>
+              </div>
+              <div class="flex justify-between items-center text-[10px] text-white/40 font-mono">
+                <span>${Utils.formatCurrency(a.total_value_usd)}</span>
+                <span>${a.balance.toFixed(2)}</span>
+              </div>
+            </div>`;
+          });
+          Elements.portfolioList.innerHTML = html || '<div class="text-xs text-white/30 italic">No assets detected.</div>';
+        },
+
+        async loadYield() {
+          const data = await API.get('/wallet/yield');
+          if (!data) return;
+
+          let html = '';
+          data.yield_positions.forEach(pos => {
+            html += `
+            <div class="sidebar-item p-3 rounded-xl border border-white/5 bg-white/[0.01] hover:bg-white/[0.05] transition-colors">
+              <div class="flex justify-between items-center mb-1">
+                <span class="text-xs font-bold text-white">${pos.protocol}</span>
+                <span class="text-[10px] text-green-400 font-bold">${pos.apy} APY</span>
+              </div>
+              <div class="flex justify-between items-center text-[10px] text-white/40 font-mono">
+                <span>Bal: ${pos.balance.toFixed(2)}</span>
+                <span>${pos.status}</span>
+              </div>
+            </div>`;
+          });
+          Elements.yieldList.innerHTML = html || '<div class="text-xs text-white/30 italic">No active yields.</div>';
+        },
+
+        async loadHistory() {
+          const data = await API.get('/wallet/history');
+          if (!data) return;
+
+          let html = '';
+          data.history.forEach(tx => {
+            const isBuy = tx.side === 'BUY';
+            const color = isBuy ? 'text-green-400' : 'text-danger';
+            const icon = isBuy ? '↓' : '↑';
+            
+            html += `
+            <div class="sidebar-item p-3 rounded-xl border border-white/5 bg-white/[0.01] hover:bg-white/[0.05] transition-colors">
+              <div class="flex justify-between items-center mb-1">
+                <span class="text-xs font-bold text-white truncate pr-2">${tx.action}</span>
+                <span class="text-[10px] font-bold ${color}">${icon} ${tx.side}</span>
+              </div>
+              <div class="flex justify-between items-center text-[10px] text-white/40 font-mono">
+                <span>Amt: ${tx.amount}</span>
+                <span>${new Date(tx.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+              </div>
+            </div>`;
+          });
+          Elements.historyList.innerHTML = html || '<div class="text-xs text-white/30 italic">Ledger empty.</div>';
+        },
+
+        async syncAll() {
+          await Promise.all([
+            this.loadPortfolio(),
+            this.loadYield(),
+            this.loadHistory()
+          ]);
+        }
+      };
+
+      // --- TERMINAL MODULE ---
+      let isSending = false;
+      const Terminal = {
+        init: () => {
+          Elements.chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if(isSending) return;
+            const msg = Elements.chatInput.value.trim();
+            if(!msg || msg.length < 2) return;
+
+            // 1. Display User Input
+            isSending = true;
+            Utils.appendLog(msg, 'user');
+            Elements.chatInput.value = '';
+            Elements.chatInput.disabled = true;
+
+            // 2. Fetch from AI Engine
+            const response = await API.post('/api/chat', { message: msg });
+            
+            // 3. Display AI Response
+            if (response && response.reply) {
+              Utils.appendLog(response.reply, 'agent');
+            }
+            
+            // 4. If a trade happened, refresh dashboard components
+            if(response && response.trade_status && response.trade_status.success) {
+              Dashboard.syncAll();
+            }
+
+            isSending = false;
+            Elements.chatInput.disabled = false;
+            Elements.chatInput.focus();
+          });
+        }
+      };
+
+      // --- WEBSOCKET CONNECTION (NEURAL SYNC) ---
+      const connectWebSocket = () => {
+        const token = Auth.getToken();
+        if(!token) return;
+        
+        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+        const wsUrl = `${protocol}://${window.location.host}/ws/neural-sync?token=${token}`;
+        const ws = new WebSocket(wsUrl);
+
+        ws.onmessage = (event) => {
+          try {
+            const payload = JSON.parse(event.data);
+            if(payload.type === 'neural_sync') {
+              Utils.appendLog(payload.data, 'system');
+            }
+          } catch(e) {}
+        };
+
+        ws.onclose = () => {
+          setTimeout(connectWebSocket, 3000);
+        };
+      };
+
+      // --- SIDEBAR TOGGLE ---
+      function toggleSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        sidebar.classList.toggle('-translate-x-full');
+      }
+
+      // --- PUBLIC API ---
+      return {
+        boot: () => {
+          Terminal.init();
+          Dashboard.syncAll();
+          connectWebSocket();
+        }
+      };
+    })();
+
+    // Initialize application when DOM is ready
+    document.addEventListener('DOMContentLoaded', SentinelApp.boot);
+  </script>
+</body>
+</html>
