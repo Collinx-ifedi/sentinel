@@ -19,9 +19,17 @@ class MarketResolver:
     Replaces legacy synchronous ccxt logic with modern async HTTPX calls.
     """
     def __init__(self):
-        # API Endpoints
-        self.jup_price_url = "https://api.jup.ag/price/v2"
-        self.jup_tokens_url = "https://tokens.jup.ag/tokens?tags=verified" # Strict verified list
+        # API Endpoints (Patched for DNS migration to unified api.jup.ag)
+        self.base_url = "https://api.jup.ag"
+        self.jup_price_url = f"{self.base_url}/price/v2"
+        self.jup_tokens_url = f"{self.base_url}/tokens/v2/tag?query=verified" # Strict verified list
+        
+        # API Key Integration
+        self.api_key = os.getenv("JUPITER_API_KEY")
+        self.headers = {
+            "x-api-key": self.api_key,
+            "Content-Type": "application/json"
+        }
         
         # GeckoTerminal is used as a free, reliable source for Solana OHLCV
         self.gecko_ohlcv_url = "https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/ohlcv/{timeframe}"
@@ -41,14 +49,15 @@ class MarketResolver:
             return
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            # Applied headers for API Key authentication and increased timeout slightly
+            async with httpx.AsyncClient(timeout=15.0, headers=self.headers) as client:
                 response = await client.get(self.jup_tokens_url)
                 response.raise_for_status()
                 tokens = response.json()
                 
                 for token in tokens:
                     symbol = token.get("symbol", "").upper()
-                    mint = token.get("address")
+                    mint = token.get("id") # V2 Schema change: 'address' is now 'id'
                     if symbol and mint:
                         # Only map the first verified instance of a symbol to avoid spoofed tokens
                         if symbol not in self._token_cache:
@@ -56,6 +65,8 @@ class MarketResolver:
                             
                 self._cache_last_updated = now
                 log.info(f"Token cache refreshed. Loaded {len(self._token_cache)} tokens.")
+        except httpx.HTTPStatusError as e:
+            log.error(f"Jupiter API Authentication Error: {e.response.status_code} - Check API Key.")
         except Exception as e:
             log.error(f"Failed to refresh Jupiter token cache: {e}")
 
@@ -77,7 +88,8 @@ class MarketResolver:
             return 0.0
             
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            # Applied headers for API Key authentication
+            async with httpx.AsyncClient(timeout=5.0, headers=self.headers) as client:
                 params = {"ids": mint_address}
                 response = await client.get(self.jup_price_url, params=params)
                 response.raise_for_status()
