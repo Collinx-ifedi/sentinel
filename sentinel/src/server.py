@@ -347,8 +347,8 @@ async def get_portfolio(user: User = Depends(get_current_user), db: AsyncSession
     portfolio = []
     
     # Add Native SOL with live pricing
-    sol_market_data = await resolver.resolve_and_price("SOL")
-    sol_price = sol_market_data.get("price", 0.0) if sol_market_data.get("success") else 0.0
+    _, sol_price = await resolver.resolve_and_price("SOL")
+    sol_price = sol_price if sol_price is not None else 0.0
     
     portfolio.append({
         "name": "Solana",
@@ -366,8 +366,8 @@ async def get_portfolio(user: User = Depends(get_current_user), db: AsyncSession
         symbol = meta.get("symbol", f"UNK-{mint[:4]}")
         
         # Resolve dynamic price via MarketResolver using the mint address
-        token_market_data = await resolver.resolve_and_price(mint)
-        token_price = token_market_data.get("price", 0.0) if token_market_data.get("success") else 0.0
+        _, token_price = await resolver.resolve_and_price(mint)
+        token_price = token_price if token_price is not None else 0.0
         
         portfolio.append({
             "name": meta.get("name", "Unknown Token"),
@@ -429,36 +429,4 @@ async def get_trade_history(user: User = Depends(get_current_user), db: AsyncSes
 
     formatted_history = []
     for tx in history:
-        in_meta = metadata.get(tx.input_mint, {}).get("symbol", "UNK")
-        out_meta = metadata.get(tx.output_mint, {}).get("symbol", "UNK")
-        
-        action = "Captured" if tx.side == "BUY" else "Liquidated"
-        target_token = out_meta if tx.side == "BUY" else in_meta
-
-        formatted_history.append({
-            "id": tx.id,
-            "action": f"{action} ${target_token}",
-            "amount": tx.amount,
-            "side": tx.side,
-            "route": f"{in_meta} → {out_meta}",
-            "status": tx.status,
-            "signature": tx.signature,
-            "timestamp": tx.timestamp.isoformat()
-        })
-
-    return {"history": formatted_history}
-
-# ======================================================================================
-# 9. DIRECT STATIC FILE SERVING (GLITCHAPE FRONTEND)
-# ======================================================================================
-# This block must remain at the very bottom of the file to prevent routing conflicts.
-
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
-
-@app.get("/")
-async def serve_index():
-    return FileResponse("frontend/index.html")
-
-@app.get("/chat.html")
-async def serve_terminal():
-    return FileResponse("frontend/chat.html")
+        in_meta = metadata.get(tx.input_mint
