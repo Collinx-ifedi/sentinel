@@ -19,10 +19,10 @@ class MarketResolver:
     Replaces legacy synchronous ccxt logic with modern async HTTPX calls.
     """
     def __init__(self):
-        # API Endpoints (Patched for DNS migration to unified api.jup.ag)
-        self.base_url = "https://api.jup.ag"
-        self.jup_price_url = f"{self.base_url}/price/v2"
-        self.jup_tokens_url = f"{self.base_url}/tokens/v2/tag?query=verified" # Strict verified list
+        # API Endpoints (Migrated to Jupiter Lite-API infrastructure)
+        self.base_url = "https://lite-api.jup.ag"
+        self.jup_price_url = f"{self.base_url}/price/v3"
+        self.jup_tokens_url = f"{self.base_url}/tokens/v2" 
         
         # API Key Integration
         self.api_key = os.getenv("JUPITER_API_KEY")
@@ -49,7 +49,7 @@ class MarketResolver:
             return
 
         try:
-            # Applied headers for API Key authentication and increased timeout slightly
+            # Applied headers for API Key authentication and strictly enforce 15.0s timeout
             async with httpx.AsyncClient(timeout=15.0, headers=self.headers) as client:
                 response = await client.get(self.jup_tokens_url)
                 response.raise_for_status()
@@ -57,7 +57,7 @@ class MarketResolver:
                 
                 for token in tokens:
                     symbol = token.get("symbol", "").upper()
-                    mint = token.get("id") # V2 Schema change: 'address' is now 'id'
+                    mint = token.get("address") # Updated from 'id' to 'address' for Lite-API
                     if symbol and mint:
                         # Only map the first verified instance of a symbol to avoid spoofed tokens
                         if symbol not in self._token_cache:
@@ -66,7 +66,12 @@ class MarketResolver:
                 self._cache_last_updated = now
                 log.info(f"Token cache refreshed. Loaded {len(self._token_cache)} tokens.")
         except httpx.HTTPStatusError as e:
-            log.error(f"Jupiter API Authentication Error: {e.response.status_code} - Check API Key.")
+            if e.response.status_code == 429:
+                log.error("Jupiter API Rate Limited (429) - Backing off.")
+            else:
+                log.error(f"Jupiter API Authentication/HTTP Error: {e.response.status_code} - Check API Key.")
+        except httpx.RequestError as e:
+            log.error(f"Jupiter API DNS/Network Fault during token fetch: {e}")
         except Exception as e:
             log.error(f"Failed to refresh Jupiter token cache: {e}")
 
@@ -83,7 +88,7 @@ class MarketResolver:
         return self._token_cache.get(symbol)
 
     async def get_token_price(self, mint_address: str) -> float:
-        """Fetches the real-time USD price via Jupiter V2 Price API."""
+        """Fetches the real-time USD price via Jupiter V3 Price API."""
         if not mint_address:
             return 0.0
             
@@ -98,6 +103,13 @@ class MarketResolver:
                 token_data = data.get(mint_address)
                 if token_data and "price" in token_data:
                     return float(token_data["price"])
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                log.error(f"Rate Limited (429) fetching price for {mint_address}.")
+            else:
+                log.error(f"HTTP Error fetching price for {mint_address}: {e.response.status_code}")
+        except httpx.RequestError as e:
+            log.error(f"DNS/Network Error fetching price for {mint_address}: {e}")
         except Exception as e:
             log.error(f"Price fetch failed for mint {mint_address}: {e}")
             
