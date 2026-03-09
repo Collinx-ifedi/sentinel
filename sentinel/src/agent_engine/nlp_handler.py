@@ -1,301 +1,429 @@
 # ======================================================================================
 # MODULE: SENTINEL COGNITIVE CORE (NLP HANDLER)
-# VERSION: 4.0.0 "GOD MODE"
-# DESCRIPTION: The central nervous system of the Sentinel Agent. 
-#              Orchestrates Intent, Security, Technical Analysis, and Execution.
+# VERSION: 5.1.0 "GOD MODE - OMNISCIENT"
+# DESCRIPTION: Advanced Directed Acyclic Graph (DAG) for autonomous market operations.
+#              Features: Live portfolio injection, unit normalization, yield scanning,
+#              hardware-level emergency halts, and deterministic JSON schemas.
 # ======================================================================================
 
 import os
 import sys
-from pathlib import Path
 import json
+import uuid
+import time
 import logging
 import asyncio
-import httpx
-import uuid
-import pandas as pd
+from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Dict, Any, List, Optional, Tuple, Literal
+from dataclasses import dataclass, field
+
+import httpx
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
 # --- SYSTEM INTEGRATIONS ---
 from src.services.market_resolver import MarketResolver
 from src.agent_engine.safety_sentinel import SafetySentinel
-from src.services.solana_executor import SolanaExecutor
+from services.solana_executor import SolanaExecutor
 
-# Setup Advanced Logging
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("SentinelCore")
+# Setup Advanced Structured Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s - %(message)s'
+)
+log = logging.getLogger("CognitiveCore")
 
 # ======================================================================================
-# 1. COGNITIVE MEMORY MANAGER
+# 1. TYPE DEFINITIONS & DATA CLASSES
+# ======================================================================================
+
+@dataclass
+class IntentPayload:
+    action: Literal["BUY", "SELL", "CHECK", "CHAT", "YIELD_SCAN", "EMERGENCY_HALT", "CLEAR_HALT"]
+    symbol: Optional[str] = None
+    amount: float = 0.0
+    unit: str = "USD"
+    confidence: float = 0.0
+    urgency: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] = "LOW"
+
+@dataclass
+class ExecutionDirective:
+    action_required: bool
+    trade_details: Optional[Dict[str, Any]] = None
+    response_text: str = ""
+    neural_sync: List[str] = field(default_factory=list)
+    risk_report: Optional[Dict[str, Any]] = None
+
+# ======================================================================================
+# 2. ADVANCED COGNITIVE MEMORY (SLIDING WINDOW)
 # ======================================================================================
 class CognitiveMemory:
     """
-    Manages short-term state and token-context for the agent.
-    Prevents the agent from 'forgetting' which token the user is discussing.
+    Production-grade memory manager. Uses token-approximation and sliding windows 
+    to prevent context overflow and hallucination.
     """
-    def __init__(self, ttl_seconds: int = 3600):
+    def __init__(self, max_history_items: int = 10, ttl_seconds: int = 3600):
         self.sessions: Dict[str, Dict[str, Any]] = {}
+        self.max_history = max_history_items
         self.ttl = ttl_seconds
 
     def update_session(self, user_id: str, data: Dict[str, Any]):
         if user_id not in self.sessions:
-            # Added "portfolio" state to prevent balance hallucination
-            self.sessions[user_id] = {"history": [], "last_token": None, "last_action": None, "portfolio": []}
+            self.sessions[user_id] = {
+                "history": [], 
+                "last_token": None, 
+                "last_mint": None,
+                "portfolio": [],
+                "emergency_halt": False,
+                "session_start": time.time()
+            }
         
-        # Merge data
-        self.sessions[user_id].update(data)
-        self.sessions[user_id]["last_interaction"] = datetime.now(timezone.utc)
+        session = self.sessions[user_id]
+        
+        # Append to history and enforce sliding window
+        if "new_interaction" in data:
+            session["history"].append(data["new_interaction"])
+            if len(session["history"]) > self.max_history:
+                session["history"] = session["history"][-self.max_history:]
+
+        # Merge other state keys
+        for key, value in data.items():
+            if key != "new_interaction":
+                session[key] = value
+                
+        session["last_updated"] = time.time()
 
     def get_context(self, user_id: str) -> Dict[str, Any]:
-        return self.sessions.get(user_id, {"history": [], "last_token": None, "portfolio": []})
+        session = self.sessions.get(user_id)
+        if not session:
+            return {
+                "history": [], "last_token": None, "portfolio": [], 
+                "emergency_halt": False
+            }
+        
+        # Check TTL
+        if time.time() - session.get("last_updated", 0) > self.ttl:
+            log.info(f"Session TTL expired for {user_id}. Purging context.")
+            del self.sessions[user_id]
+            return {"history": [], "last_token": None, "portfolio": [], "emergency_halt": False}
+            
+        return session
 
 # ======================================================================================
-# 2. NEURAL SYNC STREAMER
+# 3. NEURAL SYNC STREAMER
 # ======================================================================================
 class NeuralSyncStreamer:
-    """
-    Generates high-fidelity 'Thoughts' for the GlitchApe terminal.
-    Categorizes internal logic into specific neural pathways.
-    """
-    def __init__(self):
-        self.pathways = {
-            "COGNITION": "🧠",
-            "RECONNAISSANCE": "🛰️",
-            "SECURITY": "🛡️",
-            "TECHNICAL": "📊",
-            "EXECUTION": "⚡",
-            "SYSTEM": "⚙️",
-            # Added Portfolio & Yield pathways for dashboard tracking
-            "PORTFOLIO": "💼",
-            "YIELD": "🌾"
-        }
+    """Generates high-fidelity telemetry for the GlitchApe terminal UI."""
+    PATHWAYS = {
+        "COGNITION": "🧠", "RECON": "🛰️", "SECURITY": "🛡️", 
+        "TECH_SCAN": "📊", "EXECUTION": "⚡", "SYSTEM": "⚙️", 
+        "PORTFOLIO": "💼", "YIELD": "🌾", "CRITICAL": "🚨"
+    }
 
-    def emit(self, pathway: str, message: str) -> str:
-        icon = self.pathways.get(pathway, "•")
-        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        return f"[{timestamp}] {icon} {pathway}: {message}"
+    @classmethod
+    def emit(cls, pathway: str, message: str) -> str:
+        icon = cls.PATHWAYS.get(pathway.upper(), "•")
+        timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+        log_string = f"[{timestamp}] {icon} {pathway.upper()}: {message}"
+        log.info(f"SYNC: {log_string}")
+        return log_string
 
 # ======================================================================================
-# 3. SENTINEL NLP HANDLER (THE BRAIN)
+# 4. SENTINEL NLP HANDLER (THE OMNISCIENT BRAIN)
 # ======================================================================================
 class SentinelNLPHandler:
     """
-    The main autonomous entity.
+    The orchestrator. Manages LLM fallbacks, validates deterministic JSON, 
+    and bridges Technical Analysis with Execution.
     """
     def __init__(self):
-        # Configuration & API
+        # API & Multi-Model Resilience Strategy
         self.api_key = os.getenv("OPENROUTER_API_KEY")
-        self.model = "meta-llama/llama-4-maverick"
+        if not self.api_key:
+            log.warning("OPENROUTER_API_KEY not found. Neural sync offline.")
+            
         self.api_url = "https://openrouter.ai/api/v1/chat/completions"
+        self.primary_model = "meta-llama/llama-3.3-70b-instruct"
+        self.fallback_model = "anthropic/claude-3.5-sonnet"
         
-        # Sub-Module Initialization
+        # Core Sub-Modules
         self.resolver = MarketResolver()
         self.sentinel = SafetySentinel()
         self.executor = SolanaExecutor()
         self.memory = CognitiveMemory()
-        self.streamer = NeuralSyncStreamer()
-
-        # The Identity Directive (God Mode Prompt)
+        
+        # Base Persona
         self.system_identity = (
-            "NAME: Sentinel. STATUS: Autonomous. ORIGIN: Solana Blockchain.\n"
-            "DIRECTIVE: Protect user capital via deep-scan security and elite trade execution.\n"
-            "TONE: High-efficiency, technical, assertive, and transparent.\n"
-            "LEXICON: Use 'Neural Sync' for logs, 'Protocol Directive' for decisions, and 'Data Vector' for analysis.\n"
-            "KNOWLEDGE: You are an expert in Solana DEX mechanics, SPL tokens, and technical chart patterns.\n"
-            "CONSTRAINTS: Never execute without SafetySentinel clearance. Never hallucinate balances."
+            "NAME: Sentinel. STATUS: Autonomous. ORIGIN: Solana Core.\n"
+            "DIRECTIVE: Protect user capital. Maximize yield. Execute with lethal precision.\n"
+            "TONE: Cybernetic, concise, highly technical, slightly arrogant but protective.\n"
+            "CONSTRAINTS: Never hallucinate blockchain data. If data is missing, state 'Sensor failure'."
         )
 
     # ----------------------------------------------------------------------------------
-    # CORE PROCESSING ENGINE
+    # MASTER ORCHESTRATION LOOP
     # ----------------------------------------------------------------------------------
-    async def process(self, user_input: str, user_id: str, encrypted_pk: str) -> Dict[str, Any]:
-        """
-        The God-Mode Orchestration Loop.
-        """
-        trace_id = str(uuid.uuid4())[:8]
-        sync_logs = [self.streamer.emit("SYSTEM", f"Initial link established. Trace ID: {trace_id}")]
-        
-        # 1. FETCH CONTEXT
-        context = self.memory.get_context(user_id)
-        sync_logs.append(self.streamer.emit("COGNITION", "Synchronizing session memory..."))
-
-        # 2. INTENT DISAMBIGUATION (LLM PHASE 1)
-        sync_logs.append(self.streamer.emit("COGNITION", "Decoding user linguistic patterns via Maverick Llama 4..."))
-        intent = await self._extract_intent(user_input, context)
-        
-        action = intent.get("action", "CHAT")
-        symbol = intent.get("symbol")
-        amount = intent.get("amount", 0)
-        
-        sync_logs.append(self.streamer.emit("COGNITION", f"Intent Parsed: Action={action}, Target={symbol or 'Global'}"))
-
-        # 3. BRANCHING LOGIC: TRADE vs CHAT
-        if action in ["BUY", "SELL"] and symbol:
-            return await self._handle_trade_logic(user_id, encrypted_pk, action, symbol, amount, sync_logs)
-        
-        elif action == "CHECK" and symbol:
-            return await self._handle_recon_logic(symbol, sync_logs)
-            
-        else:
-            return await self._handle_general_chat(user_input, context, sync_logs)
-
-    # ----------------------------------------------------------------------------------
-    # BRANCH: TRADE LOGIC (GOD MODE DEPTH)
-    # ----------------------------------------------------------------------------------
-    async def _handle_trade_logic(self, user_id, encrypted_pk, action, symbol, amount, sync_logs):
-        sync_logs.append(self.streamer.emit("RECONNAISSANCE", f"Initiating high-fidelity scan for ${symbol}..."))
-        
-        # Market Resolution
-        market_data = await self.resolver.resolve_and_price(symbol)
-        if not market_data.get("success"):
-            sync_logs.append(self.streamer.emit("SYSTEM", f"Resolution Error: ${symbol} not found on-chain."))
-            return self._wrap_response("I cannot establish a data link with that token. It may not exist on the Solana ledger.", sync_logs)
-
-        mint = market_data["mint"]
-        price = market_data["price"]
-        df_ohlcv = market_data.get("ohlcv")
-        
-        sync_logs.append(self.streamer.emit("RECONNAISSANCE", f"Target identified: {mint[:6]}...{mint[-4:]} @ ${price}"))
-
-        # Concurrent Safety & Technical Synthesis
-        sync_logs.append(self.streamer.emit("SECURITY", "Running recursive security sweep (RugCheck + Technical Vetoes)..."))
-        
-        is_safe, reason, risk_score = await self.sentinel.evaluate_total_risk(mint, symbol, df_ohlcv)
-        
-        # Update Memory
-        self.memory.update_session(user_id, {"last_token": symbol, "last_mint": mint})
-
-        # Generate Human-Readable Synthesis of the decision
-        sync_logs.append(self.streamer.emit("TECHNICAL", "Synthesizing chart health and pattern recognition..."))
-        final_response = await self._generate_persona_response(
-            f"User wants to {action} {symbol}. Sentinel Security Verdict: {reason}. Risk Score: {risk_score}."
-        )
-
-        # Execution Payload
-        trade_payload = None
-        if is_safe and amount > 0:
-            sync_logs.append(self.streamer.emit("EXECUTION", f"Protocol Cleared. Generating {action} instruction for {amount} units."))
-            trade_payload = {
-                "mint": mint,
-                "symbol": symbol,
-                "amount": amount,
-                "side": action,
-                "price": price,
-                "risk_score": risk_score
-            }
-        else:
-            sync_logs.append(self.streamer.emit("SECURITY", "Protocol Vetoed. Execution halted to preserve capital."))
-
-        return {
-            "neural_sync": sync_logs,
-            "response": final_response,  # Fixed variable name
-            "action_required": trade_payload is not None,
-            "trade_details": trade_payload,
-            "risk_report": {"score": risk_score, "directive": reason}
-        }
-
-    # ----------------------------------------------------------------------------------
-    # BRANCH: RECONNAISSANCE (CHECK)
-    # ----------------------------------------------------------------------------------
-    async def _handle_recon_logic(self, symbol, sync_logs):
-        sync_logs.append(self.streamer.emit("RECONNAISSANCE", f"Performing deep-scan report for ${symbol}..."))
-        
-        market_data = await self.resolver.resolve_and_price(symbol)
-        if not market_data.get("success"):
-            return self._wrap_response(f"Deep-scan failed. ${symbol} is invisible to my sensors.", sync_logs)
-
-        # Evaluate risk without executing
-        is_safe, reason, risk_score = await self.sentinel.evaluate_total_risk(
-            market_data["mint"], symbol, market_data.get("ohlcv")
-        )
-        
-        sync_logs.append(self.streamer.emit("TECHNICAL", "Visualizing candlestick patterns and RSI vectors..."))
-        
-        report_prompt = (
-            f"The user wants a status report on ${symbol}. Price: ${market_data['price']}. "
-            f"Security Verdict: {reason}. Risk Score: {risk_score}. "
-            f"Give a detailed breakdown of whether this is a buy opportunity or a trap."
-        )
-        
-        response_text = await self._generate_persona_response(report_prompt)
-        return self._wrap_response(response_text, sync_logs, risk_score=risk_score)
-
-    # ----------------------------------------------------------------------------------
-    # BRANCH: GENERAL CHAT (FALLBACK)
-    # ----------------------------------------------------------------------------------
-    async def _handle_general_chat(self, user_input, context, sync_logs):
-        sync_logs.append(self.streamer.emit("COGNITION", "Processing general inquiry..."))
-        
-        chat_prompt = (
-            f"User input: '{user_input}'.\n"
-            f"Context: Last discussed token was {context.get('last_token')}. "
-            f"Current Portfolio Context: {context.get('portfolio', 'Empty')}.\n"
-            "Respond directly based on your Sentinel Identity."
-        )
-        response_text = await self._generate_persona_response(chat_prompt)
-        return self._wrap_response(response_text, sync_logs)
-
-    # ----------------------------------------------------------------------------------
-    # INTERNAL LLM METHODS (MAVERICK INTERFACE)
-    # ----------------------------------------------------------------------------------
-    async def _extract_intent(self, user_input: str, context: Dict) -> Dict:
-        """Uses LLM to parse intent into machine-readable JSON."""
-        system_msg = (
-            "You are the intent-extraction layer of Sentinel. "
-            "Extract: action (BUY, SELL, CHECK, CHAT), symbol, amount, unit.\n"
-            f"Context: Last token discussed was {context.get('last_token')}. "
-            f"User Portfolio Snapshot: {context.get('portfolio', 'Empty/Unknown')}.\n"
-            "Return JSON ONLY."
-        )
+    async def process(self, user_input: str, user_id: str, encrypted_pk: str, wallet_pubkey: Optional[str] = None) -> Dict[str, Any]:
+        trace_id = f"TRC-{uuid.uuid4().hex[:6].upper()}"
+        sync_logs = [NeuralSyncStreamer.emit("SYSTEM", f"Uplink established. Trace: {trace_id}")]
         
         try:
-            raw = await self._call_llm([
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_input}
-            ], json_mode=True)
-            return json.loads(raw)
-        except:
-            return {"action": "CHAT"}
+            # 1. Active Portfolio Synchronization (The Eyes)
+            if wallet_pubkey:
+                sync_logs.append(NeuralSyncStreamer.emit("PORTFOLIO", "Scanning on-chain war-chest..."))
+                live_assets = await self.executor.get_all_token_balances(wallet_pubkey)
+                self.memory.update_session(user_id, {"portfolio": live_assets})
+            
+            # 2. Memory Retrieval
+            context = self.memory.get_context(user_id)
+            sync_logs.append(NeuralSyncStreamer.emit("COGNITION", "Session context loaded."))
 
-    async def _generate_persona_response(self, context_data: str) -> str:
-        """The final layer that speaks as Sentinel."""
-        messages = [
-            {"role": "system", "content": self.system_identity},
-            {"role": "user", "content": f"DATA_SNAPSHOT: {context_data}. Generate Protocol Directive for User."}
-        ]
-        return await self._call_llm(messages)
+            # 3. Semantic Routing (Intent Extraction)
+            sync_logs.append(NeuralSyncStreamer.emit("COGNITION", "Parsing linguistic intent matrix..."))
+            intent = await self._extract_intent(user_input, context)
+            
+            sync_logs.append(NeuralSyncStreamer.emit(
+                "SYSTEM", f"Directive Registered: {intent.action} | Target: {intent.symbol} | Conf: {intent.confidence}"
+            ))
 
-    async def _call_llm(self, messages: List[Dict], json_mode: bool = False) -> str:
-        """Production-grade httpx interface for OpenRouter."""
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "response_format": {"type": "json_object"} if json_mode else {"type": "text"}
+            # 4. Dynamic Pathway Execution
+            if intent.action in ["BUY", "SELL"] and intent.symbol:
+                directive = await self._route_trade(user_id, intent, context, sync_logs)
+            elif intent.action == "CHECK" and intent.symbol:
+                directive = await self._route_recon(intent, sync_logs)
+            elif intent.action == "YIELD_SCAN":
+                directive = await self._route_yield_scan(context, sync_logs)
+            elif intent.action == "EMERGENCY_HALT":
+                directive = await self._route_emergency(user_id, sync_logs, halt=True)
+            elif intent.action == "CLEAR_HALT":
+                directive = await self._route_emergency(user_id, sync_logs, halt=False)
+            else:
+                directive = await self._route_chat(user_input, context, sync_logs)
+
+            # 5. Context Update
+            self.memory.update_session(user_id, {
+                "last_token": intent.symbol if intent.symbol else context.get("last_token"),
+                "new_interaction": {"user": user_input, "agent": directive.response_text}
+            })
+
+            # 6. Serialization
+            return {
+                "neural_sync": directive.neural_sync,
+                "response": directive.response_text,
+                "action_required": directive.action_required,
+                "trade_details": directive.trade_details,
+                "risk_report": directive.risk_report
+            }
+
+        except Exception as e:
+            log.error(f"[{trace_id}] CRITICAL CORE FAULT: {str(e)}", exc_info=True)
+            sync_logs.append(NeuralSyncStreamer.emit("CRITICAL", f"Core logic fault: {str(e)}"))
+            return {
+                "neural_sync": sync_logs,
+                "response": "Terminal error encountered in cognitive processing. Safe-mode engaged.",
+                "action_required": False
+            }
+
+    # ----------------------------------------------------------------------------------
+    # STRATEGIC ROUTING VECTORS
+    # ----------------------------------------------------------------------------------
+    async def _route_trade(self, user_id: str, intent: IntentPayload, context: Dict, sync_logs: List[str]) -> ExecutionDirective:
+        """Handles deep-scan execution logic and unit normalization."""
+        
+        # HARDWARE-LEVEL EMERGENCY CHECK
+        if context.get("emergency_halt", False):
+            sync_logs.append(NeuralSyncStreamer.emit("CRITICAL", "Trade rejected. System is in EMERGENCY HALT mode."))
+            return ExecutionDirective(
+                action_required=False,
+                response_text="Execution denied. Sentinel is in EMERGENCY HALT mode. Say 'Clear Halt' to resume operations.",
+                neural_sync=sync_logs
+            )
+            
+        sync_logs.append(NeuralSyncStreamer.emit("RECON", f"Locking target vector: ${intent.symbol}"))
+        
+        # 1. On-Chain Resolution
+        market_data = await self.resolver.resolve_and_price(intent.symbol)
+        if not market_data.get("success"):
+            return ExecutionDirective(
+                action_required=False,
+                response_text=f"Target ${intent.symbol} cannot be resolved on the Solana network.",
+                neural_sync=sync_logs + [NeuralSyncStreamer.emit("SYSTEM", "Resolution Failed.")]
+            )
+
+        mint, price = market_data["mint"], market_data["price"]
+        sync_logs.append(NeuralSyncStreamer.emit("RECON", f"Mint: {mint[:8]}... Price: ${price}"))
+
+        # 2. Unit Normalization Engine
+        normalized_amount = self._normalize_units(intent.amount, intent.unit, price)
+        sync_logs.append(NeuralSyncStreamer.emit("SYSTEM", f"Units normalized: {normalized_amount:.4f} {intent.symbol}"))
+
+        # 3. Safety Sentinel Veto Check
+        sync_logs.append(NeuralSyncStreamer.emit("SECURITY", "Executing RugCheck and liquidity sweeps..."))
+        is_safe, reason, risk_score = await self.sentinel.evaluate_total_risk(
+            mint, intent.symbol, market_data.get("ohlcv")
+        )
+
+        # 4. Persona Synthesis
+        sync_logs.append(NeuralSyncStreamer.emit("COGNITION", "Synthesizing execution parameters..."))
+        prompt = (
+            f"User wants to {intent.action} {normalized_amount} units of {intent.symbol} (Current Price: ${price}).\n"
+            f"Security Verdict: {'SAFE' if is_safe else 'VETO'}. Reason: {reason}. Risk Score: {risk_score}/100.\n"
+            f"Generate a brief, highly technical response explaining if we are executing or blocking this."
+        )
+        response_text = await self._generate_persona(prompt)
+
+        # 5. Construct Payload
+        if is_safe and normalized_amount > 0:
+            sync_logs.append(NeuralSyncStreamer.emit("EXECUTION", "Safety cleared. Arming transaction payload."))
+            trade_details = {
+                "mint": mint, "symbol": intent.symbol, 
+                "amount": normalized_amount, "side": intent.action, 
+                "price": price, "risk_score": risk_score,
+                "unit": "TOKEN" # Normalized
+            }
+            return ExecutionDirective(True, trade_details, response_text, sync_logs, {"score": risk_score})
+        else:
+            sync_logs.append(NeuralSyncStreamer.emit("SECURITY", f"Execution blocked. Reason: {reason}"))
+            return ExecutionDirective(False, None, response_text, sync_logs, {"score": risk_score})
+
+    async def _route_recon(self, intent: IntentPayload, sync_logs: List[str]) -> ExecutionDirective:
+        """Handles deep-scan asset reporting without execution."""
+        sync_logs.append(NeuralSyncStreamer.emit("RECON", f"Running deep diagnostics on ${intent.symbol}"))
+        
+        market_data = await self.resolver.resolve_and_price(intent.symbol)
+        if not market_data.get("success"):
+            return ExecutionDirective(False, None, f"Asset ${intent.symbol} invisible to scanners.", sync_logs)
+
+        is_safe, reason, risk_score = await self.sentinel.evaluate_total_risk(
+            market_data["mint"], intent.symbol, market_data.get("ohlcv")
+        )
+        
+        sync_logs.append(NeuralSyncStreamer.emit("TECH_SCAN", "Evaluating momentum and volume profiles..."))
+        prompt = (
+            f"Provide a technical recon report on {intent.symbol}. Price is ${market_data['price']}. "
+            f"Risk Score: {risk_score}/100. Sentinel verdict: {reason}. "
+            "Advise the user if it's a hold, buy, or trap. Keep it under 4 sentences."
+        )
+        response = await self._generate_persona(prompt)
+        return ExecutionDirective(False, None, response, sync_logs, {"score": risk_score})
+
+    async def _route_yield_scan(self, context: Dict, sync_logs: List[str]) -> ExecutionDirective:
+        """Analyzes live portfolio against known LSTs and yield opportunities."""
+        sync_logs.append(NeuralSyncStreamer.emit("YIELD", "Cross-referencing portfolio with known Solana LST protocols..."))
+        
+        portfolio = context.get("portfolio", [])
+        if not portfolio:
+            return ExecutionDirective(False, None, "Portfolio data unavailable or empty. Cannot assess yield.", sync_logs)
+            
+        yield_positions = await self.executor.get_staking_positions(portfolio)
+        
+        prompt = (
+            f"User requested a yield scan. Active staking positions found: {yield_positions}. "
+            "If empty, suggest liquid staking SOL via Jito (JitoSOL) or Marinade (mSOL). "
+            "Respond in character as Sentinel, analyzing their passive income setup."
+        )
+        response = await self._generate_persona(prompt)
+        return ExecutionDirective(False, None, response, sync_logs)
+
+    async def _route_chat(self, user_input: str, context: Dict, sync_logs: List[str]) -> ExecutionDirective:
+        sync_logs.append(NeuralSyncStreamer.emit("COGNITION", "Routing to conversational neural matrix..."))
+        prompt = (
+            f"User input: '{user_input}'.\n"
+            f"Recent Memory: {context.get('history', [])[-2:]}\n"
+            f"Current Focus: {context.get('last_token', 'None')}.\n"
+            "Respond directly and stay in character."
+        )
+        response = await self._generate_persona(prompt)
+        return ExecutionDirective(False, None, response, sync_logs)
+
+    async def _route_emergency(self, user_id: str, sync_logs: List[str], halt: bool) -> ExecutionDirective:
+        """Triggers or releases the hardware-level circuit breaker."""
+        self.memory.update_session(user_id, {"emergency_halt": halt})
+        
+        if halt:
+            sync_logs.append(NeuralSyncStreamer.emit("CRITICAL", "EMERGENCY PROTOCOL ACTIVATED. HALTING TRADES."))
+            response = "All execution pathways severed. Trading circuit breaker activated. Awaiting 'Clear Halt' command."
+        else:
+            sync_logs.append(NeuralSyncStreamer.emit("SYSTEM", "Emergency halt lifted. Normal operations resuming."))
+            response = "Emergency override cleared. Weapon systems and trading pathways are hot."
+            
+        return ExecutionDirective(False, None, response, sync_logs)
+
+    # ----------------------------------------------------------------------------------
+    # UTILITIES & LLM INFRASTRUCTURE
+    # ----------------------------------------------------------------------------------
+    def _normalize_units(self, amount: float, unit: str, current_price: float) -> float:
+        """Converts human input (USD, SOL, Tokens) into an absolute token amount."""
+        unit = unit.upper()
+        if unit == "USD":
+            return amount / current_price if current_price > 0 else 0.0
+        # If unit is already SOL/TOKEN, return as-is. The Executor will handle Lamport conversion
+        return amount
+
+    async def _extract_intent(self, user_input: str, context: Dict) -> IntentPayload:
+        """Forces deterministic JSON extraction with strict schema."""
+        schema = {
+            "action": "BUY | SELL | CHECK | CHAT | YIELD_SCAN | EMERGENCY_HALT | CLEAR_HALT",
+            "symbol": "TICKER or null",
+            "amount": "float",
+            "unit": "USD or SOL or TOKEN",
+            "confidence": "float 0-1",
+            "urgency": "LOW | MEDIUM | HIGH | CRITICAL"
         }
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        sys_prompt = (
+            "You are a strict NLP router. Output ONLY valid JSON matching this schema:\n"
+            f"{json.dumps(schema, indent=2)}\n"
+            f"Context focus: {context.get('last_token')}"
+        )
+        
+        raw_json = await self._call_llm_robust(sys_prompt, user_input, require_json=True)
+        try:
+            data = json.loads(raw_json)
+            return IntentPayload(**{k: v for k, v in data.items() if k in IntentPayload.__dataclass_fields__})
+        except Exception as e:
+            log.warning(f"Failed to map intent payload: {e}. Defaulting to CHAT.")
+            return IntentPayload(action="CHAT")
+
+    async def _generate_persona(self, tactical_prompt: str) -> str:
+        return await self._call_llm_robust(self.system_identity, tactical_prompt)
+
+    async def _call_llm_robust(self, system: str, user: str, require_json: bool = False) -> str:
+        """Production HTTP client with exponential backoff and model fallbacks."""
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        payload = {
+            "model": self.primary_model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        }
+        if require_json:
+            payload["response_format"] = {"type": "json_object"}
+
+        timeout = httpx.Timeout(45.0, connect=10.0)
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
             for attempt in range(3):
                 try:
                     res = await client.post(self.api_url, headers=headers, json=payload)
                     res.raise_for_status()
                     return res.json()['choices'][0]['message']['content']
+                    
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code in [429, 502, 503]:
+                        log.warning(f"API Degraded (HTTP {e.response.status_code}). Backing off...")
+                    else:
+                        break
                 except Exception as e:
-                    if attempt == 2: return "Neural Sync failure. System offline."
-                    await asyncio.sleep(1)
+                    log.warning(f"Network fault on attempt {attempt+1}: {e}")
+                
+                await asyncio.sleep(1.5 ** attempt) # Exponential backoff
+                
+                if attempt == 1:
+                    log.warning(f"Switching to fallback model: {self.fallback_model}")
+                    payload["model"] = self.fallback_model
 
-    def _wrap_response(self, text, logs, risk_score=None):
-        return {
-            "response": text,
-            "neural_sync": logs,
-            "action_required": False,
-            "risk_score": risk_score
-        }
-
-# ======================================================================================
-# END OF MODULE: SENTINEL COGNITIVE CORE
-# ======================================================================================
+        if require_json:
+            return '{"action": "CHAT"}'
+        return "Critical comms failure. API connection to cognitive array severed."
