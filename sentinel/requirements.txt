@@ -2,36 +2,36 @@
 # SENTINEL PROTOCOL - CORE DEPENDENCIES
 # ==============================================================================
 # --- Web Server & API Framework ---
-fastapi==0.110.0
-uvicorn[standard]==0.27.1
-python-multipart==0.0.9
-email-validator==2.1.1
+fastapi
+uvicorn[standard]
+python-multipart
+email-validator
 
 # --- Authentication & Security (Argon2 + JWT) ---
-argon2-cffi==23.1.0
-PyJWT==2.8.0
-cryptography==42.0.5
+argon2-cffi
+PyJWT
+cryptography
 
 # --- Database & Async ORM ---
-SQLAlchemy==2.0.28
-aiosqlite==0.20.0
-# asyncpg==0.29.0  # Uncomment for PostgreSQL production use
+SQLAlchemy
+aiosqlite
+asyncpg
 
 # --- AI & Asynchronous Networking ---
-httpx==0.27.0
-python-dotenv==1.0.1
-openai==1.13.3  # Compatible with OpenRouter
-PyYAML==6.0.1
+httpx
+python-dotenv
+openai
+PyYAML
 
 # --- Solana Blockchain Integration ---
-solana==0.32.0
-solders==0.20.0
-anchorpy==0.19.0
+solana
+solders
+anchorpy
 
 # --- Data Science & Technical Analysis ---
-pandas==2.3.3
-numpy==2.2
+pandas
+numpy
 
 # --- Logging & Utilities ---
-loguru==0.7.2
-types-requests==2.31.0.20240311
+loguru
+types-requests
