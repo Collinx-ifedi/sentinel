@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 # --- SYSTEM INTEGRATIONS ---
 from src.services.market_resolver import MarketResolver
-from src.safety_sentinel import SafetySentinel
+from src.agent_engine.safety_sentinel import SafetySentinel
 from src.services.solana_executor import SolanaExecutor
 
 # Setup Advanced Logging
