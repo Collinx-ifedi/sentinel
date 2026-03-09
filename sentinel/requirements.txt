@@ -35,3 +35,19 @@ numpy
 # --- Logging & Utilities ---
 loguru
 types-requests
+beautifulsoup4
+ccxt
+python-dateutil
+regex
+requests
+setuptools
+textblob
+tomlkit
+tqdm
+urllib3
+websocket
+websockets
+wheel
+jose
+passlib[bcrypt]
+databases
