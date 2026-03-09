@@ -31,7 +31,7 @@ anchorpy==0.19.0
 # --- Data Science & Technical Analysis ---
 pandas==2.3.3
 numpy==2.2
-scipy==1.12.0
+scipy==1.15
 
 # --- Logging & Utilities ---
 loguru==0.7.2
