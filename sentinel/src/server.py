@@ -429,4 +429,48 @@ async def get_trade_history(user: User = Depends(get_current_user), db: AsyncSes
 
     formatted_history = []
     for tx in history:
-        in_meta = metadata.get(tx.input_mint)
+        in_meta = metadata.get(tx.input_mint, {})
+        out_meta = metadata.get(tx.output_mint, {})
+        
+        formatted_history.append({
+            "timestamp": tx.timestamp.isoformat() if hasattr(tx.timestamp, 'isoformat') else tx.timestamp,
+            "input_mint": tx.input_mint,
+            "input_symbol": in_meta.get("symbol", "UNK"),
+            "input_amount": getattr(tx, "input_amount", 0),
+            "output_mint": tx.output_mint,
+            "output_symbol": out_meta.get("symbol", "UNK"),
+            "output_amount": getattr(tx, "output_amount", 0),
+            "signature": getattr(tx, "signature", "N/A")
+        })
+
+    return {"history": formatted_history}
+
+# ======================================================================================
+# 9. DIRECT STATIC FILE SERVING (GLITCHAPE FRONTEND)
+# ======================================================================================
+
+# We use the PROJECT_ROOT defined at the top of server.py
+# If server.py is in src/, PROJECT_ROOT is the main project folder.
+FRONTEND_DIR = PROJECT_ROOT / "frontend"
+
+# 1. Mount the folder for CSS/JS/Images
+# This handles any files the HTML asks for (e.g., <link href="/static/style.css">)
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+# 2. Manual route for the Landing Page
+@app.get("/")
+async def serve_index():
+    index_path = FRONTEND_DIR / "index.html"
+    if not index_path.exists():
+        log.error(f"Missing index.html at {index_path}")
+        raise HTTPException(status_code=404, detail="Landing page not found on server.")
+    return FileResponse(index_path)
+
+# 3. Manual route for the Terminal
+@app.get("/chat.html")
+async def serve_terminal():
+    chat_path = FRONTEND_DIR / "chat.html"
+    if not chat_path.exists():
+        log.error(f"Missing chat.html at {chat_path}")
+        raise HTTPException(status_code=404, detail="Terminal page not found on server.")
+    return FileResponse(chat_path)
