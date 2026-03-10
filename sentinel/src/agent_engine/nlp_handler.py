@@ -362,14 +362,29 @@ class SentinelNLPHandler:
     # ----------------------------------------------------------------------------------
     def _normalize_market_data(self, raw_result: Any) -> Tuple[bool, Dict[str, Any]]:
         """Safely unpacks MarketResolver output whether it returns a tuple or a dict."""
-        if isinstance(raw_result, tuple):
-            is_success = raw_result[0] if len(raw_result) > 0 else False
-            data = raw_result[1] if len(raw_result) > 1 and isinstance(raw_result[1], dict) else {}
-            return is_success, data
         
-        if isinstance(raw_result, dict):
-            return raw_result.get("success", False), raw_result
+        if isinstance(raw_result, tuple) and len(raw_result) == 2:
+            first, second = raw_result
             
+            # FORMAT 1 (NEW): (mint_address: str, price: float/int/None)
+            if isinstance(first, str) and (isinstance(second, (int, float)) or second is None):
+                return True, {
+                    "mint": first,
+                    "price": second if second is not None else 0.0
+                }
+            
+            # FORMAT 2 (LEGACY): (success: bool, data: dict)
+            if isinstance(first, bool) and isinstance(second, dict):
+                return first, second
+
+        # FORMAT 3: Dictionary containing 'mint' or 'price'
+        if isinstance(raw_result, dict):
+            # Extract success gracefully, assuming success if the key isn't provided but mint/price exists
+            is_success = raw_result.get("success", "mint" in raw_result or "price" in raw_result)
+            return is_success, raw_result
+
+        # FALLBACK: If we receive None, invalid structures, or (None, None)
+        log.warning("MarketResolver returned invalid market data.")
         return False, {}
 
     def _normalize_units(self, amount: float, unit: str, current_price: float) -> float:
