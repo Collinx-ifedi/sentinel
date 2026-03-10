@@ -14,7 +14,7 @@ import httpx
 import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple, Union
 
 from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -294,6 +294,13 @@ async def chat_with_sentinel(req: ChatRequest, user: User = Depends(get_current_
     if ai_response.get("action_required") and ai_response.get("trade_details"):
         trade = ai_response["trade_details"]
         
+        # Safe extraction if trade["mint"] accidentally returns a tuple or dict from the AI response
+        trade_mint = trade["mint"]
+        if isinstance(trade_mint, tuple) and len(trade_mint) >= 1:
+            trade_mint = trade_mint[0]
+        elif isinstance(trade_mint, dict):
+            trade_mint = trade_mint.get("mint", trade_mint.get("address", ""))
+            
         # Convert SOL/USD amounts to lamports (Simplified representation)
         amount_lamports = int(trade["amount"] * 1_000_000_000) if trade["unit"] == "SOL" else int(trade["amount"] * 1_000_000)
 
@@ -301,8 +308,8 @@ async def chat_with_sentinel(req: ChatRequest, user: User = Depends(get_current_
         trade_result = await solana_exec.execute_swap(
             user_id=user.id,
             encrypted_pk=wallet.encrypted_privkey,
-            input_mint="So11111111111111111111111111111111111111112" if trade["side"] == "BUY" else trade["mint"],
-            output_mint=trade["mint"] if trade["side"] == "BUY" else "So11111111111111111111111111111111111111112",
+            input_mint="So11111111111111111111111111111111111111112" if trade["side"] == "BUY" else trade_mint,
+            output_mint=trade_mint if trade["side"] == "BUY" else "So11111111111111111111111111111111111111112",
             amount_lamports=amount_lamports,
             is_safe=True, # Safety was already gated inside NLPHandler
             db_session=db
@@ -325,6 +332,22 @@ async def chat_with_sentinel(req: ChatRequest, user: User = Depends(get_current_
 # 8. DASHBOARD API ROUTES (LIVE PORTFOLIO, YIELD, HISTORY)
 # ======================================================================================
 
+async def _safe_resolve_price(resolver: MarketResolver, identifier: str) -> float:
+    """Helper method to safely extract the price regardless of MarketResolver return format."""
+    try:
+        result = await resolver.resolve_and_price(identifier)
+        if isinstance(result, tuple) and len(result) == 2:
+            _, price = result
+            return float(price) if price is not None else 0.0
+        elif isinstance(result, dict):
+            return float(result.get("price", 0.0))
+        else:
+            log.warning(f"MarketResolver returned invalid market data format for {identifier}")
+            return 0.0
+    except Exception as e:
+        log.warning(f"MarketResolver failed for {identifier}: {str(e)}")
+        return 0.0
+
 @app.get("/wallet/portfolio", summary="Fetch Portfolio Balances & Prices")
 async def get_portfolio(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     wallet_result = await db.execute(select(AgentWallet).where(AgentWallet.user_id == user.id))
@@ -346,9 +369,8 @@ async def get_portfolio(user: User = Depends(get_current_user), db: AsyncSession
     # 2. Build the UI response payload
     portfolio = []
     
-    # Add Native SOL with live pricing
-    _, sol_price = await resolver.resolve_and_price("SOL")
-    sol_price = sol_price if sol_price is not None else 0.0
+    # Add Native SOL with live pricing (Safely Resolved)
+    sol_price = await _safe_resolve_price(resolver, "SOL")
     
     portfolio.append({
         "name": "Solana",
@@ -359,15 +381,13 @@ async def get_portfolio(user: User = Depends(get_current_user), db: AsyncSession
         "total_value_usd": native_sol_balance * sol_price
     })
 
-    # Add SPL Tokens with live pricing
+    # Add SPL Tokens with live pricing (Safely Resolved)
     for t in token_balances:
         mint = t["mint"]
         meta = metadata.get(mint, {})
         symbol = meta.get("symbol", f"UNK-{mint[:4]}")
         
-        # Resolve dynamic price via MarketResolver using the mint address
-        _, token_price = await resolver.resolve_and_price(mint)
-        token_price = token_price if token_price is not None else 0.0
+        token_price = await _safe_resolve_price(resolver, mint)
         
         portfolio.append({
             "name": meta.get("name", "Unknown Token"),
