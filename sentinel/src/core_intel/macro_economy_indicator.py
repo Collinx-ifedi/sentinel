@@ -32,7 +32,7 @@ except ImportError:
 # --- LLM Configuration ---
 OPENROUTER_API_KEY_ENV_VAR = "OPENROUTER_API_KEY"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_LLM_MODEL = "meta-llama/llama-4-maverick"
+DEFAULT_LLM_MODEL = "arcee-ai/trinity-large-preview:free"
 LLM_REQUEST_TIMEOUT = 60 # Seconds
 
 # Global variable for API key to cache it after first load
