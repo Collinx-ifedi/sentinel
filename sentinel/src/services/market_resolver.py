@@ -1,5 +1,4 @@
-# services/market_resolver.py
-import os
+# src/services/market_resolver.py
 import time
 import logging
 import asyncio
@@ -16,123 +15,127 @@ class MarketResolver:
     Unified high-speed module for Solana token resolution, real-time pricing, 
     and historical OHLCV data fetching.
     
-    Replaces legacy synchronous ccxt logic with modern async HTTPX calls.
+    Updated for Sentinel Protocol architecture: 
+    - Public endpoints (No API Keys)
+    - 30-minute cache TTL
+    - Dual Symbol/Mint caching system
     """
     def __init__(self):
-        # API Endpoints (Migrated to Jupiter Lite-API infrastructure)
-        self.base_url = "https://lite-api.jup.ag"
-        self.jup_price_url = f"{self.base_url}/price/v3"
-        self.jup_tokens_url = f"{self.base_url}/tokens/v2" 
-        
-        # API Key Integration
-        self.api_key = os.getenv("JUPITER_API_KEY")
-        self.headers = {
-            "x-api-key": self.api_key,
-            "Content-Type": "application/json"
-        }
+        # API Endpoints (Public Jupiter Endpoints)
+        self.jup_price_url = "https://price.jup.ag/v4/price"
+        self.jup_tokens_url = "https://token.jup.ag/all"
         
         # GeckoTerminal is used as a free, reliable source for Solana OHLCV
         self.gecko_ohlcv_url = "https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/ohlcv/{timeframe}"
         
-        # In-Memory Cache
-        self._token_cache: Dict[str, str] = {
+        # Dual In-Memory Caches
+        self.symbol_to_mint: Dict[str, str] = {
             "SOL": "So11111111111111111111111111111111111111112",
             "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
         }
-        self._cache_last_updated = 0.0
+        self.mint_to_symbol: Dict[str, str] = {
+            "So11111111111111111111111111111111111111112": "SOL",
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC"
+        }
+        
+        self.last_refresh = 0.0
+        self.cache_ttl = 1800  # 30 minutes
 
     async def _refresh_token_cache(self) -> None:
-        """Fetches the Jupiter token list and updates the local cache."""
+        """Fetches the Jupiter token list and updates the dual caches."""
         now = time.time()
-        # Refresh cache only if it's older than 1 hour (3600 seconds)
-        if now - self._cache_last_updated < 3600 and len(self._token_cache) > 2:
+        # Refresh cache only if it's older than 30 minutes (1800 seconds)
+        if now - self.last_refresh < self.cache_ttl and len(self.symbol_to_mint) > 2:
             return
 
         try:
-            # Applied headers for API Key authentication and strictly enforce 15.0s timeout
-            async with httpx.AsyncClient(timeout=15.0, headers=self.headers) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(self.jup_tokens_url)
                 response.raise_for_status()
                 tokens = response.json()
                 
                 for token in tokens:
                     symbol = token.get("symbol", "").upper()
-                    mint = token.get("address") # Updated from 'id' to 'address' for Lite-API
+                    mint = token.get("address")
                     if symbol and mint:
-                        # Only map the first verified instance of a symbol to avoid spoofed tokens
-                        if symbol not in self._token_cache:
-                            self._token_cache[symbol] = mint
+                        # Only map the first instance of a symbol to avoid spoofed tokens
+                        if symbol not in self.symbol_to_mint:
+                            self.symbol_to_mint[symbol] = mint
+                        
+                        # Always map mint to symbol
+                        self.mint_to_symbol[mint] = symbol
                             
-                self._cache_last_updated = now
-                log.info(f"Token cache refreshed. Loaded {len(self._token_cache)} tokens.")
+                self.last_refresh = now
+                log.info(f"Token cache refreshed. Loaded {len(self.symbol_to_mint)} tokens.")
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                log.error("Jupiter API Rate Limited (429) - Backing off.")
-            else:
-                log.error(f"Jupiter API Authentication/HTTP Error: {e.response.status_code} - Check API Key.")
+            log.error(f"Jupiter API HTTP Error during token fetch: {e.response.status_code}")
         except httpx.RequestError as e:
             log.error(f"Jupiter API DNS/Network Fault during token fetch: {e}")
         except Exception as e:
             log.error(f"Failed to refresh Jupiter token cache: {e}")
 
     async def get_mint_address(self, symbol: str) -> Optional[str]:
-        """Resolves a symbol (e.g., 'JUP') into its Solana Mint Address."""
+        """Resolves a symbol (e.g., 'BONK') into its Solana Mint Address."""
         symbol = symbol.upper()
         
         # Pre-check cache
-        if symbol in self._token_cache:
-            return self._token_cache[symbol]
+        if symbol in self.symbol_to_mint:
+            return self.symbol_to_mint[symbol]
             
         # Refresh cache and check again
         await self._refresh_token_cache()
-        return self._token_cache.get(symbol)
+        return self.symbol_to_mint.get(symbol)
 
-    async def get_token_price(self, mint_address: str) -> float:
-        """Fetches the real-time USD price via Jupiter V3 Price API."""
-        if not mint_address:
-            return 0.0
+    async def get_token_price(self, mint: str) -> Optional[float]:
+        """Fetches the real-time USD price via Jupiter V4 Price API (No Auth)."""
+        if not mint:
+            return None
             
         try:
-            # Applied headers for API Key authentication
-            async with httpx.AsyncClient(timeout=5.0, headers=self.headers) as client:
-                params = {"ids": mint_address}
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                params = {"ids": mint}
                 response = await client.get(self.jup_price_url, params=params)
                 response.raise_for_status()
                 data = response.json().get("data", {})
                 
-                token_data = data.get(mint_address)
+                token_data = data.get(mint)
                 if token_data and "price" in token_data:
                     return float(token_data["price"])
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                log.error(f"Rate Limited (429) fetching price for {mint_address}.")
-            else:
-                log.error(f"HTTP Error fetching price for {mint_address}: {e.response.status_code}")
+            log.error(f"HTTP Error fetching price for {mint}: {e.response.status_code}")
         except httpx.RequestError as e:
-            log.error(f"DNS/Network Error fetching price for {mint_address}: {e}")
+            log.error(f"DNS/Network Error fetching price for {mint}: {e}")
         except Exception as e:
-            log.error(f"Price fetch failed for mint {mint_address}: {e}")
+            log.error(f"Price fetch failed for mint {mint}: {e}")
             
-        return 0.0
+        return None
 
-    async def resolve_and_price(self, symbol: str) -> Tuple[Optional[str], float]:
+    async def resolve_and_price(self, identifier: str) -> Tuple[Optional[str], Optional[float]]:
         """
-        Unified helper for the Agent Brain. 
+        Unified helper for the Sentinel Agent. 
+        Automatically detects if identifier is a symbol or mint address.
         Returns (mint_address, current_price).
         """
-        mint = await self.get_mint_address(symbol)
+        # If length is > 30, we treat it directly as a Solana mint address
+        if len(identifier) > 30:
+            mint = identifier
+        else:
+            mint = await self.get_mint_address(identifier)
+            
         if not mint:
-            log.warning(f"Could not resolve symbol '{symbol}' to a mint address.")
-            return None, 0.0
+            log.warning(f"Could not resolve identifier '{identifier}' to a mint address.")
+            return None, None
             
         price = await self.get_token_price(mint)
         return mint, price
 
+    # =========================================================================
+    # HISTORICAL DATA & BACKWARD COMPATIBILITY
+    # =========================================================================
     async def get_historical_data(self, mint: str, timeframe: str, limit: int = 100) -> Optional[pd.DataFrame]:
         """
         Fetches historical OHLCV data for Technical Analysis.
         """
-        # Map legacy timeframe strings (e.g., '1h', '1d') to GeckoTerminal parameters
         gt_timeframe = "day"
         aggregate = 1
         
@@ -159,14 +162,11 @@ class MarketResolver:
                 if not ohlcv_list:
                     return None
                     
-                # Format exactly as the legacy ccxt DataFrame for backward compatibility
                 df = pd.DataFrame(ohlcv_list, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                
-                # GeckoTerminal returns timestamp in seconds. Convert to datetime.
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-                df.set_index('timestamp', inplace=False) # technical_analysis.py expects timestamp as a column, not index
+                df.set_index('timestamp', inplace=False)
                 
-                # Reverse list because APIs often return newest first, but TA needs oldest first
+                # Reverse list to ensure oldest first
                 df = df.iloc[::-1].reset_index(drop=True)
                 return df
                 
@@ -174,14 +174,9 @@ class MarketResolver:
             log.error(f"Historical data fetch failed for {mint}: {e}")
             return None
 
-    # =========================================================================
-    # BACKWARD COMPATIBILITY BRIDGE
-    # =========================================================================
     async def fetch_ohlcv(self, symbol: str, timeframe: str = '1d', limit: int = 100) -> Optional[pd.DataFrame]:
         """
-        LEGACY BRIDGE: Replaces the exact method from the old market_data.py.
-        This allows technical_analysis.py and pattern_analyzer.py to function 
-        without changing a single line of their internal code.
+        LEGACY BRIDGE: Allows older modules to function without breaking.
         """
         log.info(f"Fetching async OHLCV data for {symbol} ({timeframe})...")
         mint = await self.get_mint_address(symbol)
@@ -197,11 +192,14 @@ if __name__ == "__main__":
     
     async def test_resolver():
         resolver = MarketResolver()
-        mint, price = await resolver.resolve_and_price("JUP")
-        print(f"JUP Mint: {mint} | Price: ${price:.4f}")
         
-        df = await resolver.fetch_ohlcv("JUP", timeframe="1h", limit=5)
-        print("\nBackward Compatibility OHLCV DataFrame:")
-        print(df)
+        print("\n--- Testing Symbol Resolution ---")
+        mint, price = await resolver.resolve_and_price("BONK")
+        print(f"Symbol BONK -> Mint: {mint} | Price: ${price}")
+        
+        print("\n--- Testing Direct Mint Resolution ---")
+        direct_mint = "DezXAZ8z7PnrnRJjz3wXBoRg7R9j3F3p5hH9zq7y5E5"
+        mint, price = await resolver.resolve_and_price(direct_mint)
+        print(f"Mint Address -> Mint: {mint} | Price: ${price}")
         
     asyncio.run(test_resolver())
