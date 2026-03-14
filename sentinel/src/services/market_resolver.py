@@ -8,6 +8,7 @@ import httpx
 import pandas as pd
 
 # Setup Logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s - %(message)s')
 log = logging.getLogger("MarketResolver")
 
 class MarketResolver:
@@ -15,28 +16,32 @@ class MarketResolver:
     Unified high-speed module for Solana token resolution, real-time pricing, 
     and historical OHLCV data fetching.
     
-    Updated for Sentinel Protocol architecture: 
-    - Public endpoints (No API Keys)
-    - 30-minute cache TTL
-    - Dual Symbol/Mint caching system
+    Architecture Updates (God Mode):
+    - Public API Integration (No Auth Required)
+    - Static Asset Bypass for 0ms resolution on major pairs
+    - Dual Symbol/Mint memory caching
+    - Fault-tolerant price fetching with backoff
     """
     def __init__(self):
-        # API Endpoints (Public Jupiter Endpoints)
+        # API Endpoints (Public Free Tier)
         self.jup_price_url = "https://price.jup.ag/v4/price"
         self.jup_tokens_url = "https://token.jup.ag/all"
         
-        # GeckoTerminal is used as a free, reliable source for Solana OHLCV
+        # GeckoTerminal for Historical Data
         self.gecko_ohlcv_url = "https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/ohlcv/{timeframe}"
         
-        # Dual In-Memory Caches
-        self.symbol_to_mint: Dict[str, str] = {
+        # STATIC ASSET BYPASS: Hardcoded foundation tokens to prevent "Sensor Failure"
+        self.static_mints = {
             "SOL": "So11111111111111111111111111111111111111112",
-            "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+            "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+            "JITOSOL": "J1toso1uKSpDdVN6qsQp96aX53pA1d3A86d3Y1A4T",
+            "MSOL": "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqkVmBw"
         }
-        self.mint_to_symbol: Dict[str, str] = {
-            "So11111111111111111111111111111111111111112": "SOL",
-            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC"
-        }
+        
+        # Dynamic In-Memory Caches
+        self.symbol_to_mint: Dict[str, str] = self.static_mints.copy()
+        self.mint_to_symbol: Dict[str, str] = {v: k for k, v in self.static_mints.items()}
         
         self.last_refresh = 0.0
         self.cache_ttl = 1800  # 30 minutes
@@ -44,98 +49,127 @@ class MarketResolver:
     async def _refresh_token_cache(self) -> None:
         """Fetches the Jupiter token list and updates the dual caches."""
         now = time.time()
-        # Refresh cache only if it's older than 30 minutes (1800 seconds)
-        if now - self.last_refresh < self.cache_ttl and len(self.symbol_to_mint) > 2:
+        
+        # Guard: Respect TTL and ensure we have more than just our static assets
+        if now - self.last_refresh < self.cache_ttl and len(self.symbol_to_mint) > len(self.static_mints):
             return
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.get(self.jup_tokens_url)
                 response.raise_for_status()
                 tokens = response.json()
                 
+                new_tokens_count = 0
                 for token in tokens:
                     symbol = token.get("symbol", "").upper()
                     mint = token.get("address")
+                    
                     if symbol and mint:
-                        # Only map the first instance of a symbol to avoid spoofed tokens
+                        # Prioritize the first verified instance of a symbol (avoids fakes)
                         if symbol not in self.symbol_to_mint:
                             self.symbol_to_mint[symbol] = mint
+                            new_tokens_count += 1
                         
-                        # Always map mint to symbol
+                        # Always map mint -> symbol for reverse lookups
                         self.mint_to_symbol[mint] = symbol
                             
                 self.last_refresh = now
-                log.info(f"Token cache refreshed. Loaded {len(self.symbol_to_mint)} tokens.")
+                log.info(f"Oracle cache synchronized. Indexed {len(self.symbol_to_mint)} total assets.")
+                
         except httpx.HTTPStatusError as e:
-            log.error(f"Jupiter API HTTP Error during token fetch: {e.response.status_code}")
+            log.error(f"Oracle API Degraded (HTTP {e.response.status_code}) during token registry fetch.")
         except httpx.RequestError as e:
-            log.error(f"Jupiter API DNS/Network Fault during token fetch: {e}")
+            log.error(f"Network fault reaching token registry: {e}")
         except Exception as e:
-            log.error(f"Failed to refresh Jupiter token cache: {e}")
+            log.error(f"Critical fault in token cache refresh: {e}")
 
     async def get_mint_address(self, symbol: str) -> Optional[str]:
-        """Resolves a symbol (e.g., 'BONK') into its Solana Mint Address."""
+        """Resolves a ticker symbol (e.g., 'BONK') to its Solana Mint Address."""
         symbol = symbol.upper()
         
-        # Pre-check cache
+        # 1. Check static bypass and memory cache (0ms lookup)
         if symbol in self.symbol_to_mint:
             return self.symbol_to_mint[symbol]
             
-        # Refresh cache and check again
+        # 2. Cache miss -> Trigger background refresh -> Check again
         await self._refresh_token_cache()
         return self.symbol_to_mint.get(symbol)
 
     async def get_token_price(self, mint: str) -> Optional[float]:
-        """Fetches the real-time USD price via Jupiter V4 Price API (No Auth)."""
+        """
+        Fetches the real-time USD price via Jupiter V4 API.
+        Includes automated retries to survive transient rate limits.
+        """
         if not mint:
             return None
             
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                params = {"ids": mint}
-                response = await client.get(self.jup_price_url, params=params)
-                response.raise_for_status()
-                data = response.json().get("data", {})
-                
-                token_data = data.get(mint)
-                if token_data and "price" in token_data:
-                    return float(token_data["price"])
-        except httpx.HTTPStatusError as e:
-            log.error(f"HTTP Error fetching price for {mint}: {e.response.status_code}")
-        except httpx.RequestError as e:
-            log.error(f"DNS/Network Error fetching price for {mint}: {e}")
-        except Exception as e:
-            log.error(f"Price fetch failed for mint {mint}: {e}")
+        timeout = httpx.Timeout(10.0, connect=5.0)
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            # 3 attempts for resilience against public endpoint 429s
+            for attempt in range(3):
+                try:
+                    params = {"ids": mint}
+                    response = await client.get(self.jup_price_url, params=params)
+                    response.raise_for_status()
+                    
+                    data = response.json().get("data", {})
+                    token_data = data.get(mint)
+                    
+                    if token_data and "price" in token_data:
+                        return float(token_data["price"])
+                        
+                    return None # Token genuinely not found on Oracle
+                    
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 429:
+                        log.warning(f"Price Oracle rate limit hit for {mint[:6]}... Retrying ({attempt+1}/3)")
+                        await asyncio.sleep(1.0 * (attempt + 1)) # Linear backoff
+                    else:
+                        log.error(f"HTTP Error fetching price for {mint}: {e.response.status_code}")
+                        break
+                except httpx.RequestError as e:
+                    log.error(f"Network fault fetching price for {mint}: {e}")
+                    break
+                except Exception as e:
+                    log.error(f"Unexpected fault fetching price for {mint}: {e}")
+                    break
             
         return None
 
     async def resolve_and_price(self, identifier: str) -> Tuple[Optional[str], Optional[float]]:
         """
-        Unified helper for the Sentinel Agent. 
-        Automatically detects if identifier is a symbol or mint address.
-        Returns (mint_address, current_price).
+        Unified handler for the Sentinel NLP Core.
+        Auto-detects whether the input is a Ticker Symbol or a Mint Address.
+        
+        Returns:
+            Tuple[mint_address, current_price_usd]
         """
-        # If length is > 30, we treat it directly as a Solana mint address
+        identifier = identifier.strip()
+        
+        # Solana mints are base58 strings typically 43-44 chars long
         if len(identifier) > 30:
             mint = identifier
         else:
             mint = await self.get_mint_address(identifier)
             
         if not mint:
-            log.warning(f"Could not resolve identifier '{identifier}' to a mint address.")
+            log.warning(f"Sensor Warning: Cannot resolve identifier '{identifier}' to a valid mint.")
             return None, None
             
         price = await self.get_token_price(mint)
+        
+        if price is None:
+            log.warning(f"Sensor Warning: Resolved mint {mint[:6]}... but failed to fetch price.")
+            
         return mint, price
 
     # =========================================================================
-    # HISTORICAL DATA & BACKWARD COMPATIBILITY
+    # HISTORICAL DATA & BACKWARD COMPATIBILITY BRIDGE
     # =========================================================================
     async def get_historical_data(self, mint: str, timeframe: str, limit: int = 100) -> Optional[pd.DataFrame]:
-        """
-        Fetches historical OHLCV data for Technical Analysis.
-        """
+        """Fetches and normalizes OHLCV data for Technical Analysis modules."""
         gt_timeframe = "day"
         aggregate = 1
         
@@ -166,40 +200,42 @@ class MarketResolver:
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
                 df.set_index('timestamp', inplace=False)
                 
-                # Reverse list to ensure oldest first
+                # Reverse list to ensure chronological order (oldest -> newest)
                 df = df.iloc[::-1].reset_index(drop=True)
                 return df
                 
         except Exception as e:
-            log.error(f"Historical data fetch failed for {mint}: {e}")
+            log.error(f"GeckoTerminal fetch failed for {mint[:6]}... : {e}")
             return None
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str = '1d', limit: int = 100) -> Optional[pd.DataFrame]:
-        """
-        LEGACY BRIDGE: Allows older modules to function without breaking.
-        """
+        """LEGACY BRIDGE: Allows legacy Agent Brain modules to function safely."""
         log.info(f"Fetching async OHLCV data for {symbol} ({timeframe})...")
         mint = await self.get_mint_address(symbol)
+        
         if not mint:
             log.error(f"fetch_ohlcv aborted: Cannot resolve '{symbol}'.")
             return None
             
         return await self.get_historical_data(mint, timeframe, limit)
 
-# Example Usage Block for testing the module directly
+# =============================================================================
+# DIRECT EXECUTION TEST
+# =============================================================================
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    
     async def test_resolver():
         resolver = MarketResolver()
         
-        print("\n--- Testing Symbol Resolution ---")
-        mint, price = await resolver.resolve_and_price("BONK")
-        print(f"Symbol BONK -> Mint: {mint} | Price: ${price}")
+        print("\n--- Testing Core Asset Resolution ---")
+        mint, price = await resolver.resolve_and_price("SOL")
+        print(f"SOL -> Mint: {mint} | Price: ${price}")
         
-        print("\n--- Testing Direct Mint Resolution ---")
-        direct_mint = "DezXAZ8z7PnrnRJjz3wXBoRg7R9j3F3p5hH9zq7y5E5"
-        mint, price = await resolver.resolve_and_price(direct_mint)
-        print(f"Mint Address -> Mint: {mint} | Price: ${price}")
+        print("\n--- Testing Ticker Resolution ---")
+        mint, price = await resolver.resolve_and_price("BONK")
+        print(f"BONK -> Mint: {mint} | Price: ${price}")
+        
+        print("\n--- Testing Historical Data Bridge ---")
+        df = await resolver.fetch_ohlcv("SOL", timeframe="1h", limit=3)
+        print(df)
         
     asyncio.run(test_resolver())
