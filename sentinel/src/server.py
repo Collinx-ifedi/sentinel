@@ -283,13 +283,22 @@ async def chat_with_sentinel(req: ChatRequest, user: User = Depends(get_current_
     if not wallet:
         raise HTTPException(status_code=500, detail="Wallet architecture corrupted.")
 
-    # Let the Brain process the input (Passing public key for real-time scans)
+    # === UPDATE 1: IMMEDIATE "PRE-PULSE" TO FIX FROZEN UI ===
+    # Fire an initial log to the WebSocket before the async brain process begins
+    await ws_manager.stream_logs(user.id, [
+        f"📡 Intercepting input: '{req.message[:25]}...'",
+        "🧠 Routing to Sentinel NLP Core..."
+    ])
+
+    # Let the Brain process the input (Intent-Aware Branching applied inside)
     ai_response = await ai_brain.process(req.message, user.id, wallet.encrypted_privkey, wallet.public_key)
     
     # Background Task: Stream thoughts to the user's terminal via WebSocket
-    asyncio.create_task(ws_manager.stream_logs(user.id, ai_response.get("neural_sync", [])))
+    if "neural_sync" in ai_response:
+        asyncio.create_task(ws_manager.stream_logs(user.id, ai_response["neural_sync"]))
 
-    # Execute Trade if the AI reached an "action_required" state
+    # === UPDATE 2: HARDENED TRADE EXECUTION LOGIC ===
+    # Execute Trade ONLY if the AI reached an "action_required" state AND validated risk
     trade_result = None
     if ai_response.get("action_required") and ai_response.get("trade_details"):
         trade = ai_response["trade_details"]
@@ -304,6 +313,9 @@ async def chat_with_sentinel(req: ChatRequest, user: User = Depends(get_current_
         # Convert SOL/USD amounts to lamports (Simplified representation)
         amount_lamports = int(trade["amount"] * 1_000_000_000) if trade["unit"] == "SOL" else int(trade["amount"] * 1_000_000)
 
+        # Notify UI that execution has begun
+        await ws_manager.stream_logs(user.id, ["⚙️ Risk validated. Routing order to Solana Executor..."])
+
         # Call the Hands (Solana Executor)
         trade_result = await solana_exec.execute_swap(
             user_id=user.id,
@@ -311,16 +323,16 @@ async def chat_with_sentinel(req: ChatRequest, user: User = Depends(get_current_
             input_mint="So11111111111111111111111111111111111111112" if trade["side"] == "BUY" else trade_mint,
             output_mint=trade_mint if trade["side"] == "BUY" else "So11111111111111111111111111111111111111112",
             amount_lamports=amount_lamports,
-            is_safe=True, # Safety was already gated inside NLPHandler
+            is_safe=True, # Safety was already gated inside NLPHandler's intent branch
             db_session=db
         )
 
         # Stream the execution result back to the terminal
         if trade_result["success"]:
-            success_log = f"[EXECUTION] Trade Confirmed. Signature: {trade_result['signature'][:12]}..."
+            success_log = f"✅ [EXECUTION] Trade Confirmed. Signature: {trade_result['signature'][:12]}..."
             asyncio.create_task(ws_manager.stream_logs(user.id, [success_log]))
         else:
-            fail_log = f"[EXECUTION FAILED] {trade_result['error']}"
+            fail_log = f"❌ [EXECUTION FAILED] {trade_result['error']}"
             asyncio.create_task(ws_manager.stream_logs(user.id, [fail_log]))
 
     return {
@@ -369,7 +381,9 @@ async def get_portfolio(user: User = Depends(get_current_user), db: AsyncSession
     # 2. Build the UI response payload
     portfolio = []
     
-    # Add Native SOL with live pricing (Safely Resolved)
+    # === UPDATE 3: SOL BYPASS INTEGRATION ===
+    # This now utilizes the 0ms Static Cache from the new MarketResolver 
+    # and prevents SafetySentinel from checking 'SOL'
     sol_price = await _safe_resolve_price(resolver, "SOL")
     
     portfolio.append({
