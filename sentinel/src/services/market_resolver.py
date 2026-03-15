@@ -1,8 +1,12 @@
+# ======================================================================================
 # src/services/market_resolver.py
+# ======================================================================================
+
+import os
 import time
 import logging
 import asyncio
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 
 import httpx
 import pandas as pd
@@ -16,16 +20,18 @@ class MarketResolver:
     Unified high-speed module for Solana token resolution, real-time pricing, 
     and historical OHLCV data fetching.
     
-    Architecture Updates (God Mode):
-    - Public API Integration (No Auth Required)
-    - Static Asset Bypass for 0ms resolution on major pairs
-    - Dual Symbol/Mint memory caching
-    - Fault-tolerant price fetching with backoff
+    Architecture Updates (God Mode - v5.1.1):
+    - Replaced legacy Jupiter endpoints with api.jup.ag structured APIs.
+    - API Key Support implemented.
+    - Replaced massive token registry download with targeted search resolution.
+    - Expanded Static Asset Bypass for 0ms resolution on major pairs.
+    - Fault-tolerant price fetching with defensive JSON parsing and backoff.
     """
     def __init__(self):
-        # API Endpoints (Public Free Tier)
-        self.jup_price_url = "https://price.jup.ag/v4/price"
-        self.jup_tokens_url = "https://token.jup.ag/all"
+        # API Endpoints (Current Jupiter Architecture)
+        self.jup_price_url = "https://api.jup.ag/price/v3"
+        self.jup_tokens_search_url = "https://api.jup.ag/tokens/v2/search"
+        self.jup_api_key = os.getenv("JUP_API_KEY", "").strip()
         
         # GeckoTerminal for Historical Data
         self.gecko_ohlcv_url = "https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/ohlcv/{timeframe}"
@@ -35,6 +41,10 @@ class MarketResolver:
             "SOL": "So11111111111111111111111111111111111111112",
             "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
             "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+            "BONK": "DezXAZ8z7PnrnRJjz3wXBoRg7R9j3F3p5hH9zq7y5E5",
+            "JUP": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbAbdEM43xge",
+            "WIF": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYtM23iq8V",
+            "POPCAT": "7GCihgDB8fe6KVZzXvkKsE9EzNcc2KYcZvpUCPkM7yZ",
             "JITOSOL": "J1toso1uKSpDdVN6qsQp96aX53pA1d3A86d3Y1A4T",
             "MSOL": "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqkVmBw"
         }
@@ -42,64 +52,97 @@ class MarketResolver:
         # Dynamic In-Memory Caches
         self.symbol_to_mint: Dict[str, str] = self.static_mints.copy()
         self.mint_to_symbol: Dict[str, str] = {v: k for k, v in self.static_mints.items()}
-        
-        self.last_refresh = 0.0
-        self.cache_ttl = 1800  # 30 minutes
 
-    async def _refresh_token_cache(self) -> None:
-        """Fetches the Jupiter token list and updates the dual caches."""
-        now = time.time()
-        
-        # Guard: Respect TTL and ensure we have more than just our static assets
-        if now - self.last_refresh < self.cache_ttl and len(self.symbol_to_mint) > len(self.static_mints):
-            return
+    def _get_jup_headers(self) -> Dict[str, str]:
+        """Generates headers for Jupiter API requests, including optional auth."""
+        headers = {"Accept": "application/json"}
+        if self.jup_api_key:
+            headers["x-api-key"] = self.jup_api_key
+        return headers
 
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.get(self.jup_tokens_url)
+    async def _search_jupiter_token(self, symbol: str) -> Optional[str]:
+        """
+        Queries Jupiter token search endpoint for a specific symbol.
+        Implements strict disambiguation to avoid picking fake/scam tokens.
+        """
+        symbol_upper = symbol.upper()
+        log.info(f"Resolving symbol '{symbol_upper}' via Jupiter token search endpoint...")
+        
+        timeout = httpx.Timeout(10.0, connect=5.0)
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                params = {"query": symbol_upper}
+                response = await client.get(
+                    self.jup_tokens_search_url, 
+                    params=params, 
+                    headers=self._get_jup_headers()
+                )
                 response.raise_for_status()
+                
                 tokens = response.json()
                 
-                new_tokens_count = 0
-                for token in tokens:
-                    symbol = token.get("symbol", "").upper()
-                    mint = token.get("address")
+                if not tokens or not isinstance(tokens, list):
+                    log.warning(f"No tokens returned in Jupiter search for '{symbol_upper}'")
+                    return None
                     
-                    if symbol and mint:
-                        # Prioritize the first verified instance of a symbol (avoids fakes)
-                        if symbol not in self.symbol_to_mint:
-                            self.symbol_to_mint[symbol] = mint
-                            new_tokens_count += 1
-                        
-                        # Always map mint -> symbol for reverse lookups
-                        self.mint_to_symbol[mint] = symbol
-                            
-                self.last_refresh = now
-                log.info(f"Oracle cache synchronized. Indexed {len(self.symbol_to_mint)} total assets.")
+                # 1. Filter for EXACT symbol matches
+                exact_matches = [t for t in tokens if t.get("symbol", "").upper() == symbol_upper]
                 
-        except httpx.HTTPStatusError as e:
-            log.error(f"Oracle API Degraded (HTTP {e.response.status_code}) during token registry fetch.")
-        except httpx.RequestError as e:
-            log.error(f"Network fault reaching token registry: {e}")
-        except Exception as e:
-            log.error(f"Critical fault in token cache refresh: {e}")
+                if not exact_matches:
+                    log.warning(f"No exact Jupiter token search match found for '{symbol_upper}'. Candidates were partial.")
+                    return None
+                    
+                # 2. Disambiguation: Prefer verified/strict over unverified if tags exist
+                best_match = exact_matches[0]
+                for match in exact_matches:
+                    tags = [tag.lower() for tag in match.get("tags", [])]
+                    if "verified" in tags or "strict" in tags:
+                        best_match = match
+                        break
+                        
+                mint = best_match.get("address")
+                if mint:
+                    log.info(f"Successfully resolved '{symbol_upper}' to mint: {mint}")
+                    return mint
+                    
+            except httpx.HTTPStatusError as e:
+                log.error(f"HTTP {e.response.status_code} from Jupiter token search for '{symbol_upper}'")
+            except httpx.RequestError as e:
+                log.error(f"DNS/network failure reaching Jupiter token search for '{symbol_upper}': {e}")
+            except Exception as e:
+                log.error(f"Unexpected JSON/Parsing fault during token search for '{symbol_upper}': {e}")
+                
+        return None
 
     async def get_mint_address(self, symbol: str) -> Optional[str]:
         """Resolves a ticker symbol (e.g., 'BONK') to its Solana Mint Address."""
         symbol = symbol.upper()
         
-        # 1. Check static bypass and memory cache (0ms lookup)
+        # 1. Check static bypass (0ms lookup, 100% offline reliable)
+        if symbol in self.static_mints:
+            log.info(f"[CACHE] Symbol '{symbol}' resolved instantly via static bypass.")
+            return self.static_mints[symbol]
+            
+        # 2. Check dynamic memory cache
         if symbol in self.symbol_to_mint:
+            log.info(f"[CACHE] Symbol '{symbol}' resolved from in-memory cache.")
             return self.symbol_to_mint[symbol]
             
-        # 2. Cache miss -> Trigger background refresh -> Check again
-        await self._refresh_token_cache()
-        return self.symbol_to_mint.get(symbol)
+        # 3. Cache miss -> Search Jupiter API
+        mint = await self._search_jupiter_token(symbol)
+        
+        # Cache successful resolutions
+        if mint:
+            self.symbol_to_mint[symbol] = mint
+            self.mint_to_symbol[mint] = symbol
+            
+        return mint
 
     async def get_token_price(self, mint: str) -> Optional[float]:
         """
-        Fetches the real-time USD price via Jupiter V4 API.
-        Includes automated retries to survive transient rate limits.
+        Fetches the real-time USD price via Jupiter Price V3 API.
+        Includes automated retries and defensive JSON parsing.
         """
         if not mint:
             return None
@@ -107,30 +150,45 @@ class MarketResolver:
         timeout = httpx.Timeout(10.0, connect=5.0)
         
         async with httpx.AsyncClient(timeout=timeout) as client:
-            # 3 attempts for resilience against public endpoint 429s
+            # 3 attempts for resilience against API jitter or 429s
             for attempt in range(3):
                 try:
                     params = {"ids": mint}
-                    response = await client.get(self.jup_price_url, params=params)
+                    response = await client.get(
+                        self.jup_price_url, 
+                        params=params, 
+                        headers=self._get_jup_headers()
+                    )
                     response.raise_for_status()
                     
-                    data = response.json().get("data", {})
+                    payload = response.json()
+                    
+                    # Defensively extract data (Accounts for multiple v3 payload shapes)
+                    data = payload.get("data", {})
                     token_data = data.get(mint)
                     
-                    if token_data and "price" in token_data:
+                    # Shape A: {"data": {"mint": {"price": "1.23", ...}}}
+                    if isinstance(token_data, dict) and "price" in token_data:
                         return float(token_data["price"])
                         
-                    return None # Token genuinely not found on Oracle
+                    # Shape B: {"data": {"mint": "1.23"}} (Fallback parsing)
+                    if isinstance(token_data, (int, float, str)):
+                        try:
+                            return float(token_data)
+                        except ValueError:
+                            pass
+                            
+                    log.warning(f"Mint {mint} returned in price API, but structure lacked valid price. Payload: {payload}")
+                    return None
                     
                 except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 429:
-                        log.warning(f"Price Oracle rate limit hit for {mint[:6]}... Retrying ({attempt+1}/3)")
+                    log.error(f"HTTP {e.response.status_code} from Jupiter price API for mint {mint}")
+                    if e.response.status_code in (429, 500, 502, 503, 504):
                         await asyncio.sleep(1.0 * (attempt + 1)) # Linear backoff
-                    else:
-                        log.error(f"HTTP Error fetching price for {mint}: {e.response.status_code}")
-                        break
+                        continue
+                    break
                 except httpx.RequestError as e:
-                    log.error(f"Network fault fetching price for {mint}: {e}")
+                    log.error(f"DNS/network failure reaching Jupiter price API for mint {mint}: {e}")
                     break
                 except Exception as e:
                     log.error(f"Unexpected fault fetching price for {mint}: {e}")
@@ -161,7 +219,7 @@ class MarketResolver:
         price = await self.get_token_price(mint)
         
         if price is None:
-            log.warning(f"Sensor Warning: Resolved mint {mint[:6]}... but failed to fetch price.")
+            log.warning(f"Resolved symbol '{identifier}' to mint {mint}, but no price was returned.")
             
         return mint, price
 
@@ -226,15 +284,20 @@ if __name__ == "__main__":
     async def test_resolver():
         resolver = MarketResolver()
         
-        print("\n--- Testing Core Asset Resolution ---")
+        print("\n=== Testing Core Asset Resolution (Should hit Static Bypass) ===")
         mint, price = await resolver.resolve_and_price("SOL")
-        print(f"SOL -> Mint: {mint} | Price: ${price}")
+        print(f"Result -> SOL Mint: {mint} | Price: ${price}")
         
-        print("\n--- Testing Ticker Resolution ---")
+        print("\n=== Testing Ticker Resolution (Should hit Static Bypass) ===")
         mint, price = await resolver.resolve_and_price("BONK")
-        print(f"BONK -> Mint: {mint} | Price: ${price}")
-        
-        print("\n--- Testing Historical Data Bridge ---")
+        print(f"Result -> BONK Mint: {mint} | Price: ${price}")
+
+        print("\n=== Testing Dynamic Search Resolution (Should hit Jupiter API) ===")
+        # Testing a token unlikely to be in our static map to force the search fallback
+        mint, price = await resolver.resolve_and_price("RAY") 
+        print(f"Result -> RAY Mint: {mint} | Price: ${price}")
+
+        print("\n=== Testing Historical Data Bridge ===")
         df = await resolver.fetch_ohlcv("SOL", timeframe="1h", limit=3)
         print(df)
         
