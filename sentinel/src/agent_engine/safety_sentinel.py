@@ -14,7 +14,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
     
-from src.core_intel.macro_economy_indicator import analyze_macro_indicators, MACRO_INDICATORS
 from src.core_intel.sentiment_analysis import get_sentiment_snapshot
 
 # Setup logging
@@ -23,8 +22,8 @@ log = logging.getLogger("SafetySentinel")
 class SafetySentinel:
     """
     The Final Decision Gate for the Solana Sentinel Agent.
-    Merges on-chain security (RugCheck) with Macro, Sentiment, and TA Data.
-    Acts as a Circuit Breaker to veto dangerous transactions.
+    Merges on-chain security (RugCheck) with Sentiment, Technical Analysis (TA), 
+    and Candlestick Pattern Data. Acts as a Circuit Breaker to veto dangerous transactions.
     """
     def __init__(self, config_path: str = "config.yaml"):
         self.rugcheck_url = "https://api.rugcheck.xyz/v1/tokens/{mint}/report"
@@ -80,30 +79,6 @@ class SafetySentinel:
             # If the security check fails, default to a HIGH RISK state for safety
             return {"score": 999, "mint_authority_enabled": False, "is_rugged": True, "liquidity": 0.0}
 
-    async def _get_macro_risk(self, symbol: str) -> Tuple[float, float]:
-        """
-        Runs the legacy synchronous Macro Indicator in a separate thread.
-        Returns: (risk_0_to_100, raw_sentiment_score)
-        """
-        try:
-            # Run sync function in thread pool to prevent blocking async loop
-            results = await asyncio.to_thread(analyze_macro_indicators, MACRO_INDICATORS, symbol)
-            
-            if not results:
-                return 50.0, 0.0 # Neutral fallback
-                
-            # Average the sentiment scores (-1.0 to 1.0)
-            valid_scores = [r.get("sentiment", 0.0) for r in results if isinstance(r.get("sentiment"), (int, float))]
-            avg_sentiment = sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
-            
-            # Map sentiment [-1.0, 1.0] to Risk [100.0, 0.0]
-            macro_risk = (1.0 - avg_sentiment) * 50.0
-            return float(macro_risk), float(avg_sentiment)
-            
-        except Exception as e:
-            log.error(f"Macro analysis failed: {e}")
-            return 50.0, 0.0
-
     async def _get_sentiment_risk(self, symbol: str) -> Tuple[float, float]:
         """
         Fetches the comprehensive social/news sentiment snapshot.
@@ -127,18 +102,16 @@ class SafetySentinel:
                                   pattern_summary: Optional[Dict] = None) -> Tuple[bool, str, float]:
         """
         The Master Risk Logic Gate.
-        Evaluates RugCheck, Macro, Sentiment, and optional TA/Patterns to Output Go/No-Go.
+        Evaluates RugCheck, Sentiment, TA, and Patterns to Output Go/No-Go.
         """
         log.info(f"Sentinel initiating security sweep for {symbol} ({mint_address})...")
         
         # 1. Fetch Data Concurrently
-        rug_data, macro_data, sentiment_data = await asyncio.gather(
+        rug_data, sentiment_data = await asyncio.gather(
             self.get_security_report(mint_address),
-            self._get_macro_risk(symbol),
             self._get_sentiment_risk(symbol)
         )
         
-        macro_risk, raw_macro_sentiment = macro_data
         social_risk, raw_social_sentiment = sentiment_data
         rug_score = rug_data["score"]
         
@@ -155,7 +128,7 @@ class SafetySentinel:
         # ---------------------------------------------------------
         # ANOMALY DETECTION (Pump & Dump Filter)
         # ---------------------------------------------------------
-        # High social hype (> 0.5) combined with a moderate/bad rug score (> 300) or low liquidity
+        # High social hype (> 0.5) combined with a moderate/bad rug score (> 300)
         if raw_social_sentiment > 0.5 and rug_score > 300:
             return False, "[SENTINEL] ANOMALY VETO: Probable Pump & Dump detected. High social hype, but suspicious on-chain metrics.", 90.0
 
@@ -165,54 +138,49 @@ class SafetySentinel:
         # Normalize Rug Score (0-1000) to Risk Component (0-100)
         normalized_rug_risk = min(100.0, rug_score / 5.0)
         
-        # Calculate Total Weighted Risk
-        # 50% On-Chain, 25% Macro, 25% Sentiment
-        total_risk_score = (normalized_rug_risk * 0.50) + (macro_risk * 0.25) + (social_risk * 0.25)
+        # Extract numeric scores from TA and Patterns
+        ta_score = ta_summary.get("sentiment", {}).get("numeric_score", 0.0) if ta_summary else 0.0
+        pattern_score = pattern_summary.get("pattern_score", 0.0) if pattern_summary else 0.0
         
-        # MACRO CORRELATION: If the global market is bearish, tighten the risk allowance
-        max_allowed_risk = self.base_max_total_risk
-        if raw_macro_sentiment < -0.1: # Bearish
-            max_allowed_risk *= 0.8 # Reduce allowed risk by 20%
-            log.info(f"Macro is Bearish. Tightening Max Allowed Risk to {max_allowed_risk:.2f}")
-
+        # Map sentiment scores [-1.0, 1.0] to Risk [100.0, 0.0]
+        # A score of 1.0 (Strong Bullish) = 0.0 Risk. A score of -1.0 (Strong Bearish) = 100.0 Risk.
+        ta_risk = (1.0 - ta_score) * 50.0
+        pattern_risk = (1.0 - pattern_score) * 50.0
+        
+        # Calculate Total Weighted Risk
+        # 40% On-Chain, 20% Social Sentiment, 20% Technicals (TA), 20% Patterns
+        total_risk_score = (normalized_rug_risk * 0.40) + (social_risk * 0.20) + (ta_risk * 0.20) + (pattern_risk * 0.20)
+        
         # ---------------------------------------------------------
-        # TA & PATTERN INTEGRATION (The Technical Veto)
+        # IMMEDIATE PATTERN THREAT DETECTION (Candle Geometry Veto)
         # ---------------------------------------------------------
-        if ta_summary or pattern_summary:
-            ta_sentiment = ta_summary.get("sentiment", {}).get("numeric_score", 0.0) if ta_summary else 0.0
-            pattern_sentiment = pattern_summary.get("sentiment", "Neutral") if pattern_summary else "Neutral"
-            latest_patterns = pattern_summary.get("latest_patterns", []) if pattern_summary else []
-            
-            # 1. Base Trend Penalization
-            if ta_sentiment < -0.4 and pattern_sentiment == "Bearish":
-                total_risk_score += 10.0 
-                log.info("Chart setup is highly bearish (TA & Patterns). Increasing total risk penalty.")
-            elif ta_sentiment < -0.2:
-                total_risk_score += 5.0
-                log.info(f"TA Sentiment is bearish ({ta_sentiment:.2f}). Applying moderate risk penalty.")
-                
-            # 2. Immediate Pattern Threat Detection (Candle Geometry Veto)
+        if pattern_summary:
+            latest_patterns = pattern_summary.get("latest_patterns", [])
             if latest_patterns:
                 bearish_keywords = ["Bearish", "Shooting", "Evening", "Dark", "Three Black", "Gravestone", "Tweezer Top", "On Neck", "Above Neck", "Below Neck"]
-                # Check if any of the patterns on the absolute latest unclosed candle are bearish
                 is_immediate_threat = any(any(k in p for k in bearish_keywords) for p in latest_patterns)
                 
                 if is_immediate_threat:
                     total_risk_score += 15.0
-                    log.warning(f"Immediate bearish pattern detected on the last candle {latest_patterns}. Applying +15.0 risk penalty!")
-                    
-            # 3. Bullish Confluence Mitigation
-            if ta_sentiment > 0.4 and pattern_sentiment == "Bullish":
-                total_risk_score -= 10.0 # Reward a pristine chart setup
-                # Guardrail: Ensure risk score doesn't drop below the base on-chain risk (don't mask rug danger)
-                total_risk_score = max(total_risk_score, (normalized_rug_risk * 0.50))
-                log.info("Strong Bullish Confluence (TA & Patterns) detected. Reducing overall risk score safely.")
+                    log.warning(f"Immediate bearish pattern detected on the last candle: {latest_patterns}. Applying +15.0 risk penalty!")
+
+        # ---------------------------------------------------------
+        # BULLISH CONFLUENCE MITIGATION
+        # ---------------------------------------------------------
+        # If both technicals and patterns are strongly aligned, reward the setup
+        if ta_score > 0.4 and pattern_score > 0.2:
+            total_risk_score -= 10.0
+            # Guardrail: Ensure risk score doesn't drop below the base on-chain risk (never mask rug danger)
+            total_risk_score = max(total_risk_score, (normalized_rug_risk * 0.40))
+            log.info("Strong Bullish Confluence (TA & Patterns) detected. Reducing overall risk score safely.")
 
         # ---------------------------------------------------------
         # FINAL DECISION
         # ---------------------------------------------------------
+        max_allowed_risk = self.base_max_total_risk
+        
         if total_risk_score > max_allowed_risk:
-            reason = f"[SENTINEL] SOFT VETO: Total Risk Score ({total_risk_score:.1f}) exceeds allowed threshold ({max_allowed_risk:.1f}). Macro/Social/Chart environment does not support trade."
+            reason = f"[SENTINEL] SOFT VETO: Total Risk Score ({total_risk_score:.1f}) exceeds allowed threshold ({max_allowed_risk:.1f}). Environment does not support trade."
             return False, reason, total_risk_score
             
         success_msg = f"[SENTINEL] ALL CLEAR: Security Verified. (Risk Score: {total_risk_score:.1f}/100)"
