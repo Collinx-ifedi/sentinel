@@ -33,8 +33,9 @@ class MarketResolver:
         self.jup_tokens_search_url = "https://api.jup.ag/tokens/v2/search"
         self.jup_api_key = os.getenv("JUP_API_KEY", "").strip()
         
-        # GeckoTerminal for Historical Data
+        # GeckoTerminal for Historical Data & Price Fallback
         self.gecko_ohlcv_url = "https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/ohlcv/{timeframe}"
+        self.gecko_price_url = "https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}"
         
         # STATIC ASSET BYPASS: Hardcoded foundation tokens to prevent "Sensor Failure"
         self.static_mints = {
@@ -139,10 +140,27 @@ class MarketResolver:
             
         return mint
 
+    async def _get_token_price_gecko(self, mint: str) -> Optional[float]:
+        """Fallback method: fetches the spot price from GeckoTerminal."""
+        url = self.gecko_price_url.format(mint=mint)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                data = response.json()
+                
+                price_usd = data.get("data", {}).get("attributes", {}).get("price_usd")
+                if price_usd is not None:
+                    return float(price_usd)
+        except Exception as e:
+            log.warning(f"GeckoTerminal price fallback failed for mint {mint}: {e}")
+            
+        return None
+
     async def get_token_price(self, mint: str) -> Optional[float]:
         """
         Fetches the real-time USD price via Jupiter Price V3 API.
-        Includes automated retries and defensive JSON parsing.
+        Includes automated retries, defensive JSON parsing, and a GeckoTerminal fallback.
         """
         if not mint:
             return None
@@ -150,7 +168,7 @@ class MarketResolver:
         timeout = httpx.Timeout(10.0, connect=5.0)
         
         async with httpx.AsyncClient(timeout=timeout) as client:
-            # 3 attempts for resilience against API jitter or 429s
+            # 3 attempts for resilience against API jitter or rate limits
             for attempt in range(3):
                 try:
                     params = {"ids": mint}
@@ -162,30 +180,50 @@ class MarketResolver:
                     response.raise_for_status()
                     
                     payload = response.json()
+                    token_data = None
                     
-                    # Defensively extract data (Accounts for multiple v3 payload shapes)
-                    data = payload.get("data", {})
-                    token_data = data.get(mint)
-                    
-                    # Shape A: {"data": {"mint": {"price": "1.23", ...}}}
-                    if isinstance(token_data, dict) and "price" in token_data:
-                        return float(token_data["price"])
-                        
-                    # Shape B: {"data": {"mint": "1.23"}} (Fallback parsing)
+                    if isinstance(payload, dict):
+                        # Jupiter Price V3 normal shape
+                        if mint in payload:
+                            token_data = payload.get(mint)
+                        # Backward-compat fallback if a wrapper appears
+                        elif "data" in payload and isinstance(payload["data"], dict):
+                            token_data = payload["data"].get(mint)
+                            
+                    # Attempt to extract usdPrice
+                    if isinstance(token_data, dict):
+                        usd_price = token_data.get("usdPrice")
+                        if usd_price is not None:
+                            return float(usd_price)
+                            
+                    # Primitive fallback shape just in case
                     if isinstance(token_data, (int, float, str)):
                         try:
                             return float(token_data)
                         except ValueError:
                             pass
                             
-                    log.warning(f"Mint {mint} returned in price API, but structure lacked valid price. Payload: {payload}")
-                    return None
+                    # If we reach here, we got a 200 OK but couldn't find a usable price.
+                    # Log warnings defensively instead of dumping the whole payload.
+                    top_keys = list(payload.keys()) if isinstance(payload, dict) else type(payload)
+                    preview = str(payload)[:300]
+                    
+                    log.warning(
+                        f"Jupiter returned payload for mint {mint}, but no valid usdPrice was found. "
+                        f"Top-level keys: {top_keys}"
+                    )
+                    log.warning(f"Unusable Jupiter payload preview for {mint}: {preview}")
+                    
+                    # Immediately attempt GeckoTerminal fallback
+                    log.info(f"Attempting GeckoTerminal fallback for mint {mint}...")
+                    return await self._get_token_price_gecko(mint)
                     
                 except httpx.HTTPStatusError as e:
                     log.error(f"HTTP {e.response.status_code} from Jupiter price API for mint {mint}")
                     if e.response.status_code in (429, 500, 502, 503, 504):
                         await asyncio.sleep(1.0 * (attempt + 1)) # Linear backoff
                         continue
+                    # Break loop for 400/401/404 errors instead of pointlessly retrying
                     break
                 except httpx.RequestError as e:
                     log.error(f"DNS/network failure reaching Jupiter price API for mint {mint}: {e}")
@@ -193,8 +231,10 @@ class MarketResolver:
                 except Exception as e:
                     log.error(f"Unexpected fault fetching price for {mint}: {e}")
                     break
-            
-        return None
+                    
+        # If all Jupiter retries failed entirely, try the fallback one last time
+        log.info(f"Jupiter API completely failed. Falling back to GeckoTerminal for mint {mint}...")
+        return await self._get_token_price_gecko(mint)
 
     async def resolve_and_price(self, identifier: str) -> Tuple[Optional[str], Optional[float]]:
         """
@@ -256,7 +296,7 @@ class MarketResolver:
                     
                 df = pd.DataFrame(ohlcv_list, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-                df.set_index('timestamp', inplace=False)
+                df.set_index('timestamp', inplace=True)
                 
                 # Reverse list to ensure chronological order (oldest -> newest)
                 df = df.iloc[::-1].reset_index(drop=True)
